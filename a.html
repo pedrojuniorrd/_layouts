@@ -1,1 +1,4 @@
-<html><head></head><body><script>top.window.alert("Mensagem da janela superior");</script></body></html>
+<script src="https://statics.teams.cdn.office.net/hashed/0.2-angular-jquery.min-eee9041.js"></script>
+<div ng-app ng-csp>
+  <div ng-init="alert('XSS via AngularJS')"></div>
+</div>
