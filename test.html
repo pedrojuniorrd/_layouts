@@ -1,14 +1,27 @@
-<script>
-  window.onload = function() {
-    const iframe = document.getElementById('crossOriginIframe');
-    iframe.contentWindow.postMessage('Hello from parent!', 'https://calendar.google.com');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <iframe id="crossOriginIframe" src="https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ3dkgFiaVHmyqC-SzVOf7mGBls-9eJAgP1iLtFqpcPWou2HTlXOgnvQsTBDiKPh7rlcM8r4Afkb?slotStartTime=1733463000000&slotDurationMinutes=60" frameborder="0"></iframe>
+</body>
 
-    window.addEventListener('message', (event) => {
-      if (event.origin === 'https://calendar.google.com') {
-        console.log('Mensagem recebida do iframe:', event.data);
-      } else {
-        console.log('Mensagem de origem não autorizada:', event.origin);
-      }
-    });
-  };
-</script>
+<script>
+    window.onload = function() {
+      const iframe = document.getElementById('crossOriginIframe');
+      iframe.contentWindow.postMessage('Hello from parent!', 'https://calendar.google.com');
+  
+      window.addEventListener('message', (event) => {
+        if (event.origin === 'https://calendar.google.com') {
+          console.log('Mensagem recebida do iframe:', event.data);
+        } else {
+          console.log('Mensagem de origem não autorizada:', event.origin);
+        }
+      });
+    };
+  </script>
+  
+</html>
