@@ -1,2 +1,1 @@
-var cp = require('child_process');
-cp.exec('calc.exe');
+fetch('file:///C:/Windows/System32/calc.exe');
