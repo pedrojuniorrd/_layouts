@@ -20,27 +20,12 @@
   <p id="status">Aguardando mensagens...</p>
 
   <script>
-    // Envia mensagem inicial para a página pai
-    parent.postMessage("[iframe] Pronto para receber comandos", "*");
-
-    // Escuta mensagens da página pai
-    window.addEventListener("message", (event) => {
-      const el = document.getElementById("status");
-      el.innerText = "Mensagem recebida do pai: " + JSON.stringify(event.data);
-
-      // Responde com dados simulados
-      const fakeData = {
-        tipo: "exfil",
-        token: "FAKE-AAD-TOKEN-XYZ",
-        info: {
-          userAgent: navigator.userAgent,
-          lang: navigator.language,
-          timestamp: new Date().toISOString()
-        }
-      };
-
-      event.source.postMessage(fakeData, event.origin);
-    });
+try {
+  const dados = window.parent.document.body.innerText;
+  parent.postMessage("🟢 Consegui acessar o DOM pai!", "*");
+} catch (e) {
+  parent.postMessage("🔴 Bloqueado pela Same-Origin Policy (como esperado)", "*");
+}
   </script>
 </body>
 </html>
