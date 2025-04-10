@@ -1,31 +1,50 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>PoC PostMessage</title>
+  <title>Teste de SOP - iframe</title>
   <style>
     body {
-      background: black;
-      color: lime;
+      background: #111;
+      color: #0f0;
       font-family: monospace;
       display: flex;
-      justify-content: center;
       align-items: center;
-      flex-direction: column;
+      justify-content: center;
       height: 100vh;
+      flex-direction: column;
     }
   </style>
 </head>
 <body>
-  <h1>Iframe Injectado</h1>
-  <p id="status">Aguardando mensagens...</p>
+  <h2>🧪 Testando acesso ao DOM da janela pai...</h2>
+  <pre id="resultado">Aguardando resposta...</pre>
 
   <script>
-try {
-  const dados = window.parent.document.body.innerText;
-  parent.postMessage("🟢 Consegui acessar o DOM pai!", "*");
-} catch (e) {
-  parent.postMessage("🔴 Bloqueado pela Same-Origin Policy (como esperado)", "*");
-}
+    const resultado = document.getElementById("resultado");
+
+    try {
+      // Tenta ler o título da página pai
+      const tituloPai = window.parent.document.title;
+      
+      resultado.innerText = `✅ Sucesso! Título da página pai: "${tituloPai}"`;
+      
+      // Também envia via postMessage para a aba do Microsoft Lists
+      parent.postMessage({
+        tipo: "sop-test",
+        sucesso: true,
+        titulo: tituloPai
+      }, "*");
+
+    } catch (e) {
+      resultado.innerText = `❌ Acesso bloqueado ao DOM da página pai. SOP está protegendo corretamente.`;
+      
+      // Envia mensagem de erro para log externo
+      parent.postMessage({
+        tipo: "sop-test",
+        sucesso: false,
+        erro: e.toString()
+      }, "*");
+    }
   </script>
 </body>
 </html>
