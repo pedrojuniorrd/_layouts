@@ -1,55 +1,7 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>PoC: postMessage via iframe</title>
-  <style>
-    body {
-      background: #111;
-      color: #0f0;
-      font-family: monospace;
-      padding: 20px;
-    }
-  </style>
-</head>
-<body>
-  <h1>🔥 PoC postMessage ativa</h1>
-  <div id="log"></div>
+<script>
+  window.addEventListener("message", (e) => {
+  console.log("📥 [iframe] Recebido de", e.origin);
+  console.log("📦 Dados:", JSON.stringify(e.data, null, 2));
+});
 
-  <script>
-    // Envia mensagem para a página Lists
-    function sendTestMessages() {
-      const payloads = [
-        { type: "ping" },
-        { type: "getListInfo" },
-        { action: "openDialog" },
-        { command: "exportData" },
-        { spoof: true, try: "stealData" },
-        "Hello from iframe 👋"
-      ];
-
-      payloads.forEach((msg, i) => {
-        setTimeout(() => {
-          parent.postMessage(msg, "*");
-          log("🔼 Enviado: " + JSON.stringify(msg));
-        }, 1000 * (i + 1));
-      });
-    }
-
-    // Escuta respostas da página Lists
-    window.addEventListener("message", (event) => {
-      log("📥 Recebido de " + event.origin + ":<br>" + JSON.stringify(event.data, null, 2));
-    });
-
-    // Logger simples
-    function log(msg) {
-      const div = document.getElementById("log");
-      const p = document.createElement("p");
-      p.innerHTML = msg;
-      div.appendChild(p);
-    }
-
-    // Começa o teste
-    sendTestMessages();
-  </script>
-</body>
-</html>
+</script>
