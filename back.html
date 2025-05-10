@@ -1,15 +1,9 @@
+<!DOCTYPE html>
+<html>
+<body>
 <script>
     const n = parseInt(new URLSearchParams(location.search).get("n")) || 1;
     history.go(-n);
-
-    window.addEventListener("pageshow", (event) => {
-        if (event.persisted) {
-            const targetNode = document.getElementById("message");
-            if (targetNode) {
-                const newNode = document.createElement("div");
-                newNode.innerText = "Mutation Triggered";
-                targetNode.appendChild(newNode); // Tenta forçar o MutationObserver
-            }
-        }
-    });
 </script>
+</body>
+</html>
