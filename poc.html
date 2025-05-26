@@ -1,24 +1,39 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>PoC PostMessage Capture</title>
+  <title>PoC PostMessage Viewer</title>
+  <style>
+    body {
+      font-family: monospace;
+      white-space: pre-wrap;
+      background: #111;
+      color: #0f0;
+      padding: 20px;
+    }
+  </style>
 </head>
 <body>
-  <h1>PostMessage Capture Active</h1>
-  <script>
-    window.addEventListener("message", function(event) {
-      console.log("📩 RECEIVED POSTMESSAGE");
-      console.log("🔹 Origin:", event.origin);
-      console.log("🔹 Data:", event.data);
-      console.log("🔹 Source:", event.source);
+  <h1>📩 PostMessage Monitor Ativo</h1>
+  <div id="log"></div>
 
-      // Opcional: responder para o Teams
-      // event.source.postMessage("✅ PoC recebeu sua mensagem", event.origin);
+  <script>
+    const logDiv = document.getElementById("log");
+
+    function log(message) {
+      const p = document.createElement("div");
+      p.textContent = message;
+      logDiv.appendChild(p);
+    }
+
+    window.addEventListener("message", function(event) {
+      log("🔹 Origin: " + event.origin);
+      log("🔹 Data: " + JSON.stringify(event.data, null, 2));
+      log("🔹 ---");
     });
 
-    // Tentar pingar o parent
-    console.log("📤 Enviando ping para window.parent...");
-    window.parent.postMessage("👋 hello from PoC iframe", "*");
+    // Envia uma mensagem de volta ao parent para confirmar que está ativo
+    log("📤 Enviando ping inicial para window.parent...");
+    window.parent.postMessage("👋 Hello from PoC iframe", "*");
   </script>
 </body>
 </html>
