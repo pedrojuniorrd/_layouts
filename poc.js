@@ -18,7 +18,7 @@ function esperar(ms) {
     // Espera mais 3 segundos antes de abrir o dashboard MailerLite
     await esperar(10000);
     console.log("Abrindo a nova janela para o MailerLite...");
-
+ await esperar(15000);
     const novaJanela = window.top.open(
       "https://dashboard.mailerlite.com/products/168076388836836860/checkout/edit?ato"
     );
