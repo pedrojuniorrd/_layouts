@@ -8,7 +8,7 @@ setTimeout(function() {
 // Segundo timeout: após 6 segundos, só redireciona se não estiver com ?ato
 setTimeout(function() {
     if (window.top.location.search == "?start") {
-        window.top.open("https://dashboard.mailerlite.com/products/168076388836836860/checkout/edit?ato");
+        window.open("https://dashboard.mailerlite.com/products/168076388836836860/checkout/edit?ato");
     }
 }, 6000);
 
