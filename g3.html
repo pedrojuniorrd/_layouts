@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Teste Angular CSTI/SSI</title>
+</head>
+<body>
+  <app-root>
+    <!-- Interpolação -->
+    <div>{{ 'Interpolação simples' }}</div>
+    <div>{{ alert(1) }}</div> <!-- tentativa de CSTI -->
+
+    <!-- Property binding -->
+    <img [src]="'https://via.placeholder.com/100'" alt="Imagem segura">
+    <img [src]="alert(1)" alt="Tentativa de CSTI">
+    
+    <!-- Event binding -->
+    <button (click)="alert('CLICK!')">Clique aqui</button>
+    <div (mouseover)="alert('Mouseover!')">Passe o mouse</div>
+
+    <!-- Attribute binding -->
+    <div [attr.title]="'Título seguro'">Hover aqui</div>
+    <div [attr.title]="alert(1)">Hover tentativa CSTI</div>
+
+    <!-- Two-way binding -->
+    <input [(ngModel)]="alert(1)" placeholder="Teste ngModel">
+
+    <!-- Diretivas estruturais -->
+    <div *ngIf="alert(1)">Teste *ngIf</div>
+    <div *ngFor="let item of alert(1)">Teste *ngFor</div>
+  </app-root>
+</body>
+</html>
