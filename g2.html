@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Teste de Tags com onmouseover</title>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    .tag { margin: 10px; padding: 5px; border: 1px solid #ccc; display: inline-block; }
+  </style>
+</head>
+<body>
+  <h1>Teste de Tags HTML com onmouseover</h1>
+
+  <!-- Texto e semântica -->
+  <div class="tag" onmouseover="alert('DIV!')">DIV</div>
+  <span class="tag" onmouseover="alert('SPAN!')">SPAN</span>
+  <p class="tag" onmouseover="alert('P!')">P</p>
+  <h2 class="tag" onmouseover="alert('H2!')">H2</h2>
+  <strong class="tag" onmouseover="alert('STRONG!')">STRONG</strong>
+  <em class="tag" onmouseover="alert('EM!')">EM</em>
+
+  <!-- Listas -->
+  <ul class="tag" onmouseover="alert('UL!')">
+    <li onmouseover="alert('LI!')">LI dentro de UL</li>
+  </ul>
+  <ol class="tag" onmouseover="alert('OL!')">
+    <li onmouseover="alert('LI!')">LI dentro de OL</li>
+  </ol>
+
+  <!-- Tabelas -->
+  <table class="tag" border="1" onmouseover="alert('TABLE!')">
+    <tr onmouseover="alert('TR!')">
+      <td onmouseover="alert('TD!')">TD</td>
+      <th onmouseover="alert('TH!')">TH</th>
+    </tr>
+  </table>
+
+  <!-- Formulários -->
+  <form class="tag" onmouseover="alert('FORM!')">
+    <input type="text" value="INPUT" onmouseover="alert('INPUT!')">
+    <textarea onmouseover="alert('TEXTAREA!')">TEXTAREA</textarea>
+    <button onmouseover="alert('BUTTON!')">BUTTON</button>
+    <select onmouseover="alert('SELECT!')">
+      <option onmouseover="alert('OPTION!')">OPTION</option>
+    </select>
+  </form>
+
+  <!-- Mídia -->
+  <img src="https://via.placeholder.com/100" alt="IMG" class="tag" onmouseover="alert('IMG!')">
+  <video width="200" controls class="tag" onmouseover="alert('VIDEO!')">
+    <source src="https://www.w3schools.com/html/mov_bbb.mp4" type="video/mp4">
+  </video>
+  <audio controls class="tag" onmouseover="alert('AUDIO!')">
+    <source src="https://www.w3schools.com/html/horse.mp3" type="audio/mpeg">
+  </audio>
+  <canvas width="100" height="50" class="tag" onmouseover="alert('CANVAS!')"></canvas>
+  <svg width="100" height="50" class="tag" onmouseover="alert('SVG!')">
+    <rect width="100" height="50" style="fill:blue"></rect>
+  </svg>
+
+  <!-- Navegação -->
+  <a href="#" class="tag" onmouseover="alert('A!')">A (link)</a>
+  <nav class="tag" onmouseover="alert('NAV!')">NAV</nav>
+
+  <!-- Seção e layout -->
+  <header class="tag" onmouseover="alert('HEADER!')">HEADER</header>
+  <footer class="tag" onmouseover="alert('FOOTER!')">FOOTER</footer>
+  <section class="tag" onmouseover="alert('SECTION!')">SECTION</section>
+  <article class="tag" onmouseover="alert('ARTICLE!')">ARTICLE</article>
+  <aside class="tag" onmouseover="alert('ASIDE!')">ASIDE</aside>
+
+  <!-- Obsoletas -->
+  <center class="tag" onmouseover="alert('CENTER!')">CENTER</center>
+  <marquee class="tag" onmouseover="alert('MARQUEE!')">MARQUEE</marquee>
+</body>
+</html>
