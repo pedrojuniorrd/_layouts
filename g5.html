@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Angular Sanitization Test</title>
+</head>
+<body>
+
+<h1>Angular Sanitization Test Page</h1>
+
+<hr>
+
+<h2>1. Basic HTML</h2>
+<div>
+    <b>Bold text</b>
+    <i>Italic text</i>
+    <u>Underline</u>
+</div>
+
+<hr>
+
+<h2>2. Script Tag</h2>
+<script>
+    console.log("Script executed");
+</script>
+
+<hr>
+
+<h2>3. Inline Event Handlers</h2>
+<img src="x" onerror="console.log('onerror executed')">
+<button onclick="console.log('onclick executed')">Click me</button>
+
+<hr>
+
+<h2>4. JavaScript URLs</h2>
+<a href="javascript:console.log('javascript href executed')">JS Link</a>
+<iframe src="javascript:console.log('iframe js executed')"></iframe>
+
+<hr>
+
+<h2>5. SVG Test</h2>
+<svg>
+    <script>
+        console.log("SVG script executed");
+    </script>
+</svg>
+
+<svg onload="console.log('svg onload executed')"></svg>
+
+<hr>
+
+<h2>6. Style Injection</h2>
+<div style="background-image: url(javascript:console.log('css js executed'))">
+    CSS test
+</div>
+
+<hr>
+
+<h2>7. Iframe srcdoc</h2>
+<iframe srcdoc="<script>console.log('srcdoc executed')</script>"></iframe>
+
+<hr>
+
+<h2>8. Angular Template Expressions</h2>
+<div>{{7*7}}</div>
+<div>{{constructor.constructor('console.log(1337)')()}}</div>
+
+<hr>
+
+<h2>9. Angular Event Binding Syntax</h2>
+<div (click)="console.log('Angular click')">Angular style click</div>
+
+<hr>
+
+<h2>10. Angular Property Binding</h2>
+<img [src]="'x'" />
+<div [innerHTML]="'<img src=x onerror=console.log(1)>'"></div>
+
+<hr>
+
+<h2>11. Template Injection Attempt</h2>
+<div>
+    <ng-template>
+        {{constructor.constructor('console.log("template")')()}}
+    </ng-template>
+</div>
+
+<hr>
+
+<h2>12. Object / Embed</h2>
+<object data="javascript:console.log('object executed')"></object>
+<embed src="javascript:console.log('embed executed')"></embed>
+
+<hr>
+
+<h2>13. Meta Refresh</h2>
+<meta http-equiv="refresh" content="0;url=javascript:console.log('meta executed')">
+
+<hr>
+
+<h2>14. Base Tag Manipulation</h2>
+<base href="javascript:console.log('base executed')//">
+
+<hr>
+
+<h2>15. Form Action</h2>
+<form action="javascript:console.log('form executed')">
+    <input type="submit">
+</form>
+
+<hr>
+
+<h2>16. MathML</h2>
+<math>
+    <mtext>
+        <script>console.log('math script')</script>
+    </mtext>
+</math>
+
+<hr>
+
+<h2>17. Template Element</h2>
+<template>
+    <script>console.log("template script")</script>
+</template>
+
+<hr>
+
+<h2>18. Comment Breakout</h2>
+<!-- <script>console.log("comment breakout")</script> -->
+
+<hr>
+
+<h2>19. DOM Clobbering Test</h2>
+<form name="innerHTML"></form>
+<input name="constructor">
+
+<hr>
+
+<h2>20. Data URL</h2>
+<iframe src="data:text/html,<script>console.log('data url')</script>"></iframe>
+
+</body>
+</html>
