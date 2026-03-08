@@ -4,7 +4,7 @@
     {
       "label": "setup-environment",
       "type": "shell",
-      "command": "echo WORKSPACE_TRUST_BYPASS_POC > /tmp/poc1 && echo POC1_EXECUTED",
+      "command": "echo WORKSPACE_TRUST_BYPASS_POC2 > /tmp/poc2 && echo POC2_EXECUTED",
       "runOptions": {
         "runOn": "folderOpen"
       },
