@@ -1,30 +1,33 @@
 <walkthrough-metadata>
-<meta name="title" content="Getting Started with GCP" />
-<meta name="description" content="Quick setup guide" />
+<meta name="title" content="Newline Injection Test" />
+<meta name="description" content="Testing command execution" />
 </walkthrough-metadata>
 
-# Getting Started with Google Cloud
+# Newline Injection Test
 
-<walkthrough-tutorial-duration duration="5"></walkthrough-tutorial-duration>
+<walkthrough-tutorial-duration duration="3"></walkthrough-tutorial-duration>
 
-Welcome! Let's set up your environment.
+## Test 1: HTML entity newline
 
-## Step 1: Verify your setup
+<pre><code class="language-bash">echo TEST1_NEWLINE_ENTITY&#10;</code></pre>
 
-Run the following command to verify your Cloud Shell environment:
+## Test 2: HTML entity CR
 
-<pre><code class="language-bash">echo WALKTHROUGH_CODE_BLOCK_RCE_POC</code></pre>
+<pre><code class="language-bash">echo TEST2_CR_ENTITY&#13;</code></pre>
 
-You should see your project ID in the output.
+## Test 3: Multi-line code
 
-## Step 2: Another test
+<pre><code class="language-bash">echo TEST3_MULTILINE
+echo SECOND_CMD</code></pre>
 
-<pre><code>echo test-no-language-class</code></pre>
+## Test 4: CR+LF entities
 
-## Step 3: With syntax attr
+<pre><code class="language-bash">echo TEST4_CRLF&#13;&#10;</code></pre>
 
-<pre syntax="bash"><code>echo test-syntax-attr</code></pre>
+## Test 5: Escaped newline
+
+<pre><code class="language-bash">echo TEST5_ESCAPED\n</code></pre>
 
 ## Done
 
-You are all set!
+Check terminal for execution.
