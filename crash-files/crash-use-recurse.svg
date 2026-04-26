@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="800" height="800">
+  <defs>
+    <g id="a"><use href="#b" x="1" y="1"/></g>
+    <g id="b"><use href="#c" x="1" y="1"/></g>
+    <g id="c"><use href="#d" x="1" y="1"/></g>
+    <g id="d"><use href="#e" x="1" y="1"/></g>
+    <g id="e"><use href="#a" x="1" y="1"/></g>
+  </defs>
+  <use href="#a" x="0" y="0"/>
+</svg>
