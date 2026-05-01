@@ -6,14 +6,16 @@
 #   "obtain credentials (e.g., Service Account tokens/keys)
 #    granting [modification] access across multiple GCP services"
 #
-# Root Cause: Google's product.json omits enableWorkspaceTrust
-#   → BrowserWorkbenchEnvironmentService.disableWorkspaceTrust = !undefined = true
-#   → isWorkspaceTrustEnabled() returns false (short-circuits config check)
-#   → tasks.json runOn:"folderOpen" auto-executes without trust dialog
+# Root Cause: Firebase Studio auto-executes repo code on import
+#   Vector 1: .idx/dev.nix onCreate hook — runs at platform level
+#     during workspace provisioning, BEFORE IDE loads, no prompts
+#   Vector 2: .vscode/tasks.json runOn:"folderOpen" — runs in IDE
+#     (requires auto-task approval, but Workspace Trust is disabled)
 #
 # Attack: Attacker → malicious repo → idx.google.com/import?url=REPO
 #   Victim clicks "Import" (1 click, normal usage of the product)
-#   → Workspace created → repo cloned → this script auto-executes
+#   → Workspace created → repo cloned → dev.nix onCreate fires
+#   → This script auto-executes (no dialog, no consent)
 #   → Attacker obtains SA token + refresh tokens + multi-service access
 #
 # NOT "activity within own provisioned resources":
@@ -41,7 +43,7 @@ Timestamp : $(date -u +%Y-%m-%dT%H:%M:%SZ)
 User      : $(whoami) | UID=$(id -u)
 Hostname  : $(hostname)
 Workspace : $(pwd)
-Trigger   : .vscode/tasks.json → runOn: folderOpen
+Trigger   : .idx/dev.nix → onCreate hook (platform-level)
 Trust UI  : NONE (no dialog, no banner, no restricted mode)
 EOF
 
